@@ -1,98 +1,71 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import React, { useEffect } from 'react';
+import { View, ActivityIndicator, Text, StyleSheet } from 'react-native';
+import { useRouter } from 'expo-router';
+import { useAuth } from '@/context/AuthContext';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+export default function Entrypoint() {
+  const { merchant, loading } = useAuth();
+  const router = useRouter();
 
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
+  useEffect(() => {
+    if (loading) return;
+
+    if (merchant) {
+      const status = merchant.status;
+      const isActive = merchant.isActive;
+
+      if (isActive || status === 'active') {
+        router.replace('/(tabs)/orders');
+      } else if (status === 'pending_payment') {
+        router.replace('/payment');
+      } else if (status === 'pending_verification' || status === 'payment_pending_verification') {
+        router.replace('/pending-verification');
+      } else if (status === 'rejected') {
+        router.replace('/rejected');
+      } else {
+        router.replace('/onboarding');
+      }
+    } else {
+      router.replace('/(auth)/login');
+    }
+  }, [merchant, loading]);
+
   return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
-  );
-}
-
-export default function HomeScreen() {
-  return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
-          </ThemedText>
-        </ThemedView>
-
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
-
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
-
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
-    </ThemedView>
+    <View style={styles.container}>
+      <View style={styles.logoContainer}>
+        <Text style={styles.logoText}>FF</Text>
+        <Text style={styles.logoSubtext}>MERCHANT</Text>
+      </View>
+      <ActivityIndicator size="large" color="#1A1A1A" style={styles.loader} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
-    flexDirection: 'row',
-  },
-  safeArea: {
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
-  },
-  heroSection: {
+    backgroundColor: '#F8FAFC',
     alignItems: 'center',
     justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
   },
-  title: {
-    textAlign: 'center',
+  logoContainer: {
+    alignItems: 'center',
+    marginBottom: 40,
   },
-  code: {
-    textTransform: 'uppercase',
+  logoText: {
+    fontSize: 64,
+    fontWeight: '900',
+    color: '#1A1A1A',
+    letterSpacing: 4,
   },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
+  logoSubtext: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#64748B',
+    letterSpacing: 6,
+    marginTop: -5,
+  },
+  loader: {
+    marginTop: 20,
   },
 });
