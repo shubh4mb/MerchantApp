@@ -10,7 +10,7 @@
  */
 
 // Fallback URL if EXPO_PUBLIC_BACKEND_URL is not set
-export const DEFAULT_BACKEND_URL = 'http://192.168.29.230:5000';
+export const DEFAULT_BACKEND_URL = 'https://api.theflashfits.com';
 
 // Cleaned backend base URL (without trailing slashes)
 export const BACKEND_URL = (

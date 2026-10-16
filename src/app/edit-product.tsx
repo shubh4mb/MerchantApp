@@ -683,16 +683,6 @@ export default function EditProductScreen() {
             editable={!saving}
           />
 
-          <Text style={styles.label}>Brand / Sold By <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '400' }}>(Optional)</Text></Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Brand name"
-            placeholderTextColor="#94A3B8"
-            value={soldBy}
-            onChangeText={setSoldBy}
-            editable={!saving}
-          />
-
           <Text style={styles.label}>Description</Text>
           <TextInput
             style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
@@ -725,14 +715,14 @@ export default function EditProductScreen() {
                 <Text style={styles.sectionTitle}>Categorization & Gender</Text>
             </View>
             
-            <Text style={styles.label}>Main Category *</Text>
+            <Text style={styles.label}>Main Category * {!selectedParentCategory && <Text style={{ fontSize: 11, color: '#DC2626', fontWeight: '600' }}>(Required)</Text>}</Text>
             <TouchableOpacity 
                 style={styles.dropdownToggle} 
                 onPress={() => setShowParentCategories(!showParentCategories)}
             >
                 <Text style={styles.dropdownToggleText}>
                     {selectedParentCategory 
-                        ? (parentCategories.find((c) => c._id === selectedParentCategory)?.name || 'Select Main Category')
+                        ? (categories.find((c) => String(c._id) === String(selectedParentCategory))?.name || 'Select Main Category')
                         : 'Select Main Category'}
                 </Text>
                 {showParentCategories ? <ChevronUp size={20} color="#64748B" /> : <ChevronDown size={20} color="#64748B" />}
@@ -741,7 +731,7 @@ export default function EditProductScreen() {
             {showParentCategories && (
                 <View style={styles.multiselectContainer}>
                     {parentCategories.map((cat) => {
-                    const isSelected = selectedParentCategory === cat._id;
+                    const isSelected = String(selectedParentCategory) === String(cat._id);
                     return (
                         <TouchableOpacity
                             key={cat._id}
@@ -765,14 +755,14 @@ export default function EditProductScreen() {
             
             {selectedParentCategory ? (
                 <>
-                <Text style={styles.label}>Sub Category * <Text style={{ fontSize: 11, color: '#DC2626', fontWeight: '600' }}>(Required)</Text></Text>
+                <Text style={styles.label}>Sub Category * {!selectedSubCategory && <Text style={{ fontSize: 11, color: '#DC2626', fontWeight: '600' }}>(Required)</Text>}</Text>
                 <TouchableOpacity 
                     style={styles.dropdownToggle} 
                     onPress={() => setShowSubCategories(!showSubCategories)}
                 >
                     <Text style={styles.dropdownToggleText}>
                         {selectedSubCategory 
-                            ? (subCategories.find((c) => c._id === selectedSubCategory)?.name || 'Select Sub Category')
+                            ? (categories.find((c) => String(c._id) === String(selectedSubCategory))?.name || 'Select Sub Category')
                             : 'Select Sub Category'}
                     </Text>
                     {showSubCategories ? <ChevronUp size={20} color="#64748B" /> : <ChevronDown size={20} color="#64748B" />}
@@ -781,7 +771,7 @@ export default function EditProductScreen() {
                 {showSubCategories && (
                     <View style={styles.multiselectContainer}>
                         {subCategories.map((cat) => {
-                        const isSelected = selectedSubCategory === cat._id;
+                        const isSelected = String(selectedSubCategory) === String(cat._id);
                         return (
                             <TouchableOpacity
                             key={cat._id}

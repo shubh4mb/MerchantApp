@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,11 +13,12 @@ import {
   RefreshControl,
   ScrollView,
   useWindowDimensions,
+  Platform,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import api, { BACKEND_URL, resolveImageUrl, updateSingleSizeStock } from '../../utils/api';
 import * as ImagePicker from 'expo-image-picker';
-import { Camera, Image as ImageIcon, Plus, Minus, Trash2, Edit3, Settings, Save, ChevronDown, ChevronUp, Barcode, Package, Layers, Search, X, Filter, ArrowUpDown, Check } from 'lucide-react-native';
+import { Camera, Image as ImageIcon, Plus, Minus, Trash2, Edit3, Settings, Save, ChevronDown, ChevronUp, Barcode, Package, Layers, Search, X, Filter, ArrowUpDown, Check, ChevronLeft, ChevronRight, Eye } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { getMerchantEnteredSku } from '../../utils/skuUtils';
 
@@ -58,7 +59,16 @@ interface Product {
   addedByOperator?: any;
   images?: (string | { url: string })[];
   variants: ProductVariant[];
+  price?: number;
+  mrp?: number;
+  discount?: number;
 }
+
+const getImageUrl = (img: any): string | null => {
+  if (!img) return null;
+  const uri = typeof img === 'string' ? img : img.url || null;
+  return resolveImageUrl(uri);
+};
 
 export default function ProductsScreen() {
   const { merchant } = useAuth();
@@ -82,7 +92,7 @@ export default function ProductsScreen() {
   const [currentPage, setCurrentPage] = useState(1);
 
   // Column switcher and Grid measurements
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const [numColumns, setNumColumns] = useState<3 | 4>(4);
 
   // Detail Bottom Sheet state
@@ -92,9 +102,24 @@ export default function ProductsScreen() {
   const [editingStockVal, setEditingStockVal] = useState<string>('0');
   const [savingSizeId, setSavingSizeId] = useState<string | null>(null);
 
+  // Inline Price Editing state inside Detail Bottom Sheet
+  const [editingPriceVarId, setEditingPriceVarId] = useState<string | null>(null);
+  const [inlineMrp, setInlineMrp] = useState<string>('');
+  const [inlinePrice, setInlinePrice] = useState<string>('');
+  const [inlineDiscount, setInlineDiscount] = useState<string>('');
+  const [savingPriceVarId, setSavingPriceVarId] = useState<string | null>(null);
+
+  // Fullscreen Image Preview state
+  const [previewImageVisible, setPreviewImageVisible] = useState(false);
+  const [previewImageIndex, setPreviewImageIndex] = useState(0);
+  const imageSliderRef = useRef<FlatList>(null);
+
   const handleCloseDetailModal = () => {
     setSelectedDetailProduct(null);
     setEditingSizeKey(null);
+    setEditingPriceVarId(null);
+    setPreviewImageVisible(false);
+    setPreviewImageIndex(0);
   };
 
   const HORIZONTAL_PADDING = 10;
@@ -358,17 +383,61 @@ export default function ProductsScreen() {
     }
   }, [products, reopenDetailId]);
 
+
   // States for Stock Modal
   const [stockModalVisible, setStockModalVisible] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null);
   const [sizeList, setSizeList] = useState<{ size: string; stock: string; sizeCode?: string }[]>([]);
 
-  // States for Price Modal
-  const [priceModalVisible, setPriceModalVisible] = useState(false);
-  const [mrpInput, setMrpInput] = useState('');
-  const [priceInput, setPriceInput] = useState('');
-  const [discountInput, setDiscountInput] = useState('');
+  // Unique images list for the active product (including variants and siblings)
+  const detailProductImages = useMemo(() => {
+    if (!activeDetailProduct) return [];
+    const list: string[] = [];
+    const seen = new Set<string>();
+
+    const addImg = (img: any) => {
+      const uri = getImageUrl(img);
+      if (uri && !seen.has(uri)) {
+        seen.add(uri);
+        list.push(uri);
+      }
+    };
+
+    // 1. Root product images
+    (activeDetailProduct.images || []).forEach(addImg);
+
+    // 2. Variant images
+    (activeDetailProduct.variants || []).forEach((v) => {
+      (v.images || []).forEach(addImg);
+    });
+
+    // 3. Sibling products with same styleGroupId (if any)
+    const sgId = activeDetailProduct.styleGroupId;
+    if (sgId) {
+      products.forEach((p) => {
+        if (p.styleGroupId === sgId && (p.id || p._id) !== (activeDetailProduct.id || activeDetailProduct._id)) {
+          (p.images || []).forEach(addImg);
+          (p.variants || []).forEach((v) => {
+            (v.images || []).forEach(addImg);
+          });
+        }
+      });
+    }
+
+    return list;
+  }, [activeDetailProduct, products]);
+
+  const handleOpenImagePreview = (index: number = 0) => {
+    const validIndex = Math.max(0, Math.min(index, Math.max(0, detailProductImages.length - 1)));
+    setPreviewImageIndex(validIndex);
+    setPreviewImageVisible(true);
+    setTimeout(() => {
+      try {
+        imageSliderRef.current?.scrollToIndex({ index: validIndex, animated: false });
+      } catch (e) {}
+    }, 60);
+  };
 
   // States for uploading
   const [uploadingIndex, setUploadingIndex] = useState<{ prodId: string; varIdx: number } | null>(null);
@@ -474,8 +543,13 @@ export default function ProductsScreen() {
       });
 
       setProducts(productList);
-    } catch (error) {
-      console.error('Failed to load products:', error);
+    } catch (error: any) {
+      if (error?.response?.status === 404) {
+        // Merchant has no products yet - normal empty state
+        setProducts([]);
+      } else {
+        console.error('Failed to load products:', error);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -773,32 +847,91 @@ export default function ProductsScreen() {
     setSizeList(sizeList.filter((_, idx) => idx !== index));
   };
 
-  // Pricing Modals functions
-  const handleOpenPriceModal = (product: Product, variant: ProductVariant) => {
-    setSelectedProduct(product);
-    setSelectedVariant(variant);
-    setMrpInput(variant.mrp.toString());
-    setPriceInput(variant.price.toString());
-    setDiscountInput((variant.discount || 0).toString());
-    setPriceModalVisible(true);
-  };
+  // Inline Price Editing function
+  const handleSaveInlinePrice = async (
+    product: Product | null,
+    variant: ProductVariant
+  ) => {
+    if (!product || !variant) return;
 
-  const handleSavePrice = async () => {
-    if (!selectedProduct || !selectedVariant) return;
+    const prodId = product.styleGroupId || product.id || product._id || '';
+    const varId = variant._id || '';
+    const numMrp = parseFloat(inlineMrp) || 0;
+    const numPrice = parseFloat(inlinePrice) || 0;
+    const numDiscount = parseFloat(inlineDiscount) || 0;
+
+    if (numPrice <= 0 && numMrp <= 0) {
+      Alert.alert('Invalid Price', 'Please enter a valid price or MRP.');
+      return;
+    }
+
+    setSavingPriceVarId(varId);
+
+    // Optimistically update products in local state so UI updates instantly
+    setProducts((prev) =>
+      prev.map((p) => {
+        const pId = p.styleGroupId || p.id || p._id;
+        if (pId !== prodId) return p;
+        const updatedVariants = (p.variants || []).map((v) => {
+          if (v._id !== varId) return v;
+          return {
+            ...v,
+            mrp: numMrp,
+            price: numPrice,
+            discount: numDiscount,
+          };
+        });
+        const isFirstVariant = p.variants?.[0]?._id === varId;
+        return {
+          ...p,
+          variants: updatedVariants,
+          price: isFirstVariant ? numPrice : p.price,
+          mrp: isFirstVariant ? numMrp : p.mrp,
+        };
+      })
+    );
+
+    // Also update selectedDetailProduct directly so activeDetailProduct reflects immediately
+    setSelectedDetailProduct((prev) => {
+      if (!prev) return null;
+      const prevId = prev.styleGroupId || prev.id || prev._id;
+      if (prevId !== prodId) return prev;
+      const updatedVariants = (prev.variants || []).map((v) => {
+        if (v._id !== varId) return v;
+        return {
+          ...v,
+          mrp: numMrp,
+          price: numPrice,
+          discount: numDiscount,
+        };
+      });
+      const isFirstVariant = prev.variants?.[0]?._id === varId;
+      return {
+        ...prev,
+        variants: updatedVariants,
+        price: isFirstVariant ? numPrice : prev.price,
+        mrp: isFirstVariant ? numMrp : prev.mrp,
+      };
+    });
+
     try {
-      await api.put(
-        `merchant/updatePrice/${selectedProduct.id || selectedProduct._id}/${selectedVariant._id}`,
-        {
-          mrp: parseFloat(mrpInput) || 0,
-          price: parseFloat(priceInput) || 0,
-          discount: parseFloat(discountInput) || 0,
-        }
-      );
-      Alert.alert('Success', 'Pricing updated successfully.');
-      setPriceModalVisible(false);
+      const colorVal = typeof variant.color === 'object' ? (variant.color as any)?.name : variant.color;
+      await api.put(`/merchant/updatePrice/${encodeURIComponent(prodId)}/${encodeURIComponent(varId)}`, {
+        mrp: numMrp,
+        price: numPrice,
+        discount: numDiscount,
+        color: colorVal,
+        colorName: colorVal,
+        styleGroupId: product.styleGroupId || prodId,
+        productId: product.id || product._id || prodId,
+      });
+      setEditingPriceVarId(null);
       fetchProducts();
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.message || error.message || 'Failed to update pricing.');
+      fetchProducts(); // revert on failure
+    } finally {
+      setSavingPriceVarId(null);
     }
   };
 
@@ -847,12 +980,6 @@ export default function ProductsScreen() {
         },
       ]
     );
-  };
-
-  const getImageUrl = (img: any): string | null => {
-    if (!img) return null;
-    const uri = typeof img === 'string' ? img : img.url || null;
-    return resolveImageUrl(uri);
   };
 
   // Helper to verify genuine merchant-entered code (filters out raw ObjectIds, #hashes, PRD- prefixes)
@@ -1282,13 +1409,48 @@ export default function ProductsScreen() {
             ) : null
           }
           ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <ImageIcon size={48} color="#94A3B8" />
-              <Text style={styles.emptyTitle}>No Products Found</Text>
-              <Text style={styles.emptySubtitle}>
-                Try adjusting your search query, category filter, or sorting option.
-              </Text>
-            </View>
+            products.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <View style={styles.emptyIconCircle}>
+                  <Package size={40} color="#3B82F6" />
+                </View>
+                <Text style={styles.emptyTitle}>No Products in Inventory</Text>
+                <Text style={styles.emptySubtitle}>
+                  You haven't added any products yet. Tap below to create your first product.
+                </Text>
+                <TouchableOpacity
+                  style={styles.emptyAddBtn}
+                  onPress={() => router.push('/add-product')}
+                  activeOpacity={0.8}
+                >
+                  <Plus size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                  <Text style={styles.emptyAddBtnText}>Add Your First Product</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.emptyContainer}>
+                <ImageIcon size={48} color="#94A3B8" />
+                <Text style={styles.emptyTitle}>No Matching Products</Text>
+                <Text style={styles.emptySubtitle}>
+                  Try adjusting your search query, category filter, or sorting option.
+                </Text>
+                {(searchQuery || selectedCategoryFilter !== 'All' || selectedSubCategoryFilter !== 'All' || statusFilter !== 'ALL' || sortBy !== 'newest') && (
+                  <TouchableOpacity
+                    style={styles.clearFiltersBtn}
+                    onPress={() => {
+                      setSearchQuery('');
+                      setSelectedCategoryFilter('All');
+                      setSelectedSubCategoryFilter('All');
+                      setStatusFilter('ALL');
+                      setSortBy('newest');
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.clearFiltersBtnText}>Clear All Filters</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )
           }
         />
       )}
@@ -1352,12 +1514,27 @@ export default function ProductsScreen() {
                 <ScrollView
                   style={styles.detailSheetScroll}
                   showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
                   contentContainerStyle={{ paddingBottom: 40 }}
                 >
                   {/* Header Row */}
                   <View style={styles.detailHeaderRow}>
                     {coverUri ? (
-                      <Image source={{ uri: coverUri }} style={styles.detailThumb} resizeMode="cover" />
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        onPress={() => handleOpenImagePreview(0)}
+                        style={styles.detailThumbWrap}
+                      >
+                        <Image source={{ uri: coverUri }} style={styles.detailThumb} resizeMode="cover" />
+                        <View style={styles.zoomBadge}>
+                          <Eye size={12} color="#FFFFFF" />
+                        </View>
+                        {detailProductImages.length > 1 && (
+                          <View style={styles.thumbCountBadge}>
+                            <Text style={styles.thumbCountText}>{detailProductImages.length}</Text>
+                          </View>
+                        )}
+                      </TouchableOpacity>
                     ) : (
                       <View style={styles.detailPlaceholderThumb}>
                         <ImageIcon size={24} color="#94A3B8" />
@@ -1442,6 +1619,7 @@ export default function ProductsScreen() {
                       typeof variant.color === 'object'
                         ? variant.color
                         : { name: variant.color || 'Default', hex: '#000000' };
+                    const isEditingPrice = editingPriceVarId === varId;
 
                     return (
                       <View key={varId} style={styles.variantContainer}>
@@ -1458,17 +1636,21 @@ export default function ProductsScreen() {
                               <Text style={styles.mrpText}>₹{variant.mrp || 0}</Text>
                             </Text>
                             <TouchableOpacity
-                              style={styles.pricePenBtn}
+                              style={[styles.pricePenBtn, isEditingPrice && styles.pricePenBtnActive]}
                               activeOpacity={0.7}
                               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                               onPress={() => {
-                                const targetProd = activeDetailProduct;
-                                setSelectedDetailProduct(null);
-                                setReopenDetailId(prodId);
-                                handleOpenPriceModal(targetProd, variant);
+                                if (isEditingPrice) {
+                                  setEditingPriceVarId(null);
+                                } else {
+                                  setEditingPriceVarId(varId);
+                                  setInlineMrp(variant.mrp != null ? String(variant.mrp) : '');
+                                  setInlinePrice(variant.price != null ? String(variant.price) : '');
+                                  setInlineDiscount(variant.discount != null ? String(variant.discount) : '');
+                                }
                               }}
                             >
-                              <Edit3 size={13} color="#2563EB" />
+                              <Edit3 size={13} color={isEditingPrice ? '#FFFFFF' : '#2563EB'} />
                             </TouchableOpacity>
                             <TouchableOpacity
                               onPress={() => handleDeleteVariant(prodId, varId)}
@@ -1478,6 +1660,131 @@ export default function ProductsScreen() {
                             </TouchableOpacity>
                           </View>
                         </View>
+
+                        {/* Inline Price Editing Box */}
+                        {isEditingPrice && (
+                          <View style={styles.inlinePriceEditBox}>
+                            <View style={styles.inlinePriceHeaderRow}>
+                              <Text style={styles.inlinePriceBoxTitle}>Edit Price & MRP</Text>
+                              <View style={styles.inlinePriceActionsRow}>
+                                <TouchableOpacity
+                                  style={styles.inlinePriceCancelBtn}
+                                  disabled={savingPriceVarId === varId}
+                                  onPress={() => setEditingPriceVarId(null)}
+                                >
+                                  <X size={13} color="#64748B" />
+                                  <Text style={styles.inlinePriceCancelText}>Cancel</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={[styles.inlinePriceSaveBtn, savingPriceVarId === varId && { opacity: 0.6 }]}
+                                  disabled={savingPriceVarId === varId}
+                                  onPress={() => handleSaveInlinePrice(activeDetailProduct, variant)}
+                                >
+                                  {savingPriceVarId === varId ? (
+                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                  ) : (
+                                    <>
+                                      <Check size={13} color="#FFFFFF" />
+                                      <Text style={styles.inlinePriceSaveText}>Save</Text>
+                                    </>
+                                  )}
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+
+                            <View style={styles.inlinePriceInputsRow}>
+                              <View style={styles.inlinePriceField}>
+                                <Text style={styles.inlinePriceFieldLabel}>MRP (₹)</Text>
+                                <TextInput
+                                  style={styles.inlinePriceInput}
+                                  keyboardType="numeric"
+                                  value={inlineMrp}
+                                  placeholder="0"
+                                  placeholderTextColor="#94A3B8"
+                                  textAlignVertical="center"
+                                  onChangeText={(val) => {
+                                    const clean = val.replace(/[^0-9]/g, '');
+                                    setInlineMrp(clean);
+                                    const m = parseFloat(clean) || 0;
+                                    const p = parseFloat(inlinePrice) || 0;
+                                    if (m > 0 && p > 0 && m >= p) {
+                                      setInlineDiscount(String(Math.round(((m - p) / m) * 100)));
+                                    }
+                                  }}
+                                  selectTextOnFocus
+                                />
+                              </View>
+
+                              <View style={styles.inlinePriceField}>
+                                <Text style={styles.inlinePriceFieldLabel}>Price (₹)</Text>
+                                <TextInput
+                                  style={styles.inlinePriceInput}
+                                  keyboardType="numeric"
+                                  value={inlinePrice}
+                                  placeholder="0"
+                                  placeholderTextColor="#94A3B8"
+                                  textAlignVertical="center"
+                                  onChangeText={(val) => {
+                                    const clean = val.replace(/[^0-9]/g, '');
+                                    setInlinePrice(clean);
+                                    const m = parseFloat(inlineMrp) || 0;
+                                    const p = parseFloat(clean) || 0;
+                                    if (m > 0 && p > 0) {
+                                      setInlineDiscount(String(Math.max(0, Math.round(((m - p) / m) * 100))));
+                                    }
+                                  }}
+                                  selectTextOnFocus
+                                />
+                              </View>
+
+                              <View style={styles.inlinePriceField}>
+                                <Text style={styles.inlinePriceFieldLabel}>Disc (%)</Text>
+                                <TextInput
+                                  style={styles.inlinePriceInput}
+                                  keyboardType="numeric"
+                                  value={inlineDiscount}
+                                  placeholder="0"
+                                  placeholderTextColor="#94A3B8"
+                                  textAlignVertical="center"
+                                  onChangeText={(val) => {
+                                    const clean = val.replace(/[^0-9]/g, '');
+                                    setInlineDiscount(clean);
+                                    const m = parseFloat(inlineMrp) || 0;
+                                    const d = parseFloat(clean) || 0;
+                                    if (m > 0 && d >= 0) {
+                                      const p = Math.max(0, Math.round(m * (1 - d / 100)));
+                                      setInlinePrice(String(p));
+                                    }
+                                  }}
+                                  selectTextOnFocus
+                                />
+                              </View>
+                            </View>
+                          </View>
+                        )}
+
+                        {/* Variant Photos (if available) */}
+                        {variant.images && variant.images.length > 0 && (
+                          <View style={styles.variantImagesWrap}>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                              {variant.images.map((vImg, imgIdx) => {
+                                const vUri = getImageUrl(vImg);
+                                if (!vUri) return null;
+                                const targetIdx = detailProductImages.indexOf(vUri);
+                                return (
+                                  <TouchableOpacity
+                                    key={imgIdx}
+                                    activeOpacity={0.8}
+                                    onPress={() => handleOpenImagePreview(targetIdx >= 0 ? targetIdx : 0)}
+                                    style={styles.variantThumbCard}
+                                  >
+                                    <Image source={{ uri: vUri }} style={styles.variantThumbCardImg} resizeMode="cover" />
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </ScrollView>
+                          </View>
+                        )}
 
                         {/* All Sizes & Stock for this Variant */}
                         <View style={styles.variantSizesWrap}>
@@ -1623,21 +1930,10 @@ export default function ProductsScreen() {
                     );
                   })}
 
-                  {/* Actions: Add Color Variant & Edit Details */}
-                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                  {/* Actions: Edit Details */}
+                  <View style={{ marginTop: 12 }}>
                     <TouchableOpacity
-                      style={[styles.addVariantPillBtn, { flex: 1, marginTop: 0 }]}
-                      onPress={() => {
-                        handleCloseDetailModal();
-                        router.push(`/add-variant?productId=${prodId}`);
-                      }}
-                    >
-                      <Plus size={14} color="#64748B" style={{ marginRight: 6 }} />
-                      <Text style={styles.addVariantPillText}>Add Variant</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.editAllDetailsBtn, { flex: 1 }]}
+                      style={styles.editAllDetailsBtn}
                       onPress={() => {
                         handleCloseDetailModal();
                         router.push(`/edit-product?id=${prodId}`);
@@ -1651,6 +1947,150 @@ export default function ProductsScreen() {
               );
             })()}
           </View>
+
+          {/* Fullscreen Big-Size Image Viewer Overlay */}
+          {previewImageVisible && detailProductImages.length > 0 && activeDetailProduct && (
+            <View style={styles.imageViewerOverlay}>
+              {/* Header Bar */}
+              <View style={styles.imageViewerHeader}>
+                <TouchableOpacity
+                  style={styles.imageViewerCloseBtn}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  onPress={() => setPreviewImageVisible(false)}
+                >
+                  <X size={22} color="#FFFFFF" />
+                </TouchableOpacity>
+
+                <View style={styles.imageViewerHeaderInfo}>
+                  <Text style={styles.imageViewerTitle} numberOfLines={1}>
+                    {(typeof activeDetailProduct.brand === 'object'
+                      ? (activeDetailProduct.brand as any)?.name
+                      : activeDetailProduct.brand) || activeDetailProduct.name || 'Product'}
+                  </Text>
+                  {getProductDisplayCode(activeDetailProduct) ? (
+                    <Text style={styles.imageViewerSub}>
+                      SKU: {getProductDisplayCode(activeDetailProduct)}
+                    </Text>
+                  ) : null}
+                </View>
+
+                <View style={styles.imageViewerCounterBadge}>
+                  <Text style={styles.imageViewerCounterText}>
+                    {previewImageIndex + 1} / {detailProductImages.length}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Swiper FlatList */}
+              <View style={styles.imageViewerSwiperWrap}>
+                <FlatList
+                  ref={imageSliderRef}
+                  data={detailProductImages}
+                  horizontal
+                  pagingEnabled
+                  showsHorizontalScrollIndicator={false}
+                  initialScrollIndex={previewImageIndex < detailProductImages.length ? previewImageIndex : 0}
+                  getItemLayout={(_, index) => ({
+                    length: screenWidth,
+                    offset: screenWidth * index,
+                    index,
+                  })}
+                  onScrollToIndexFailed={(info) => {
+                    setTimeout(() => {
+                      imageSliderRef.current?.scrollToIndex({ index: info.index, animated: false });
+                    }, 100);
+                  }}
+                  onMomentumScrollEnd={(e) => {
+                    const nextIdx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
+                    if (nextIdx >= 0 && nextIdx < detailProductImages.length) {
+                      setPreviewImageIndex(nextIdx);
+                    }
+                  }}
+                  keyExtractor={(item, idx) => `${item}_${idx}`}
+                  renderItem={({ item }) => (
+                    <View style={[styles.imageSlideWrap, { width: screenWidth }]}>
+                      <Image
+                        source={{ uri: item }}
+                        style={[styles.bigImage, { width: screenWidth - 24, height: screenHeight * 0.65 }]}
+                        resizeMode="contain"
+                      />
+                    </View>
+                  )}
+                />
+
+                {/* Left Arrow Button */}
+                {detailProductImages.length > 1 && previewImageIndex > 0 && (
+                  <TouchableOpacity
+                    style={[styles.navArrowBtn, styles.navArrowLeft]}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      const nextIdx = previewImageIndex - 1;
+                      setPreviewImageIndex(nextIdx);
+                      imageSliderRef.current?.scrollToIndex({ index: nextIdx, animated: true });
+                    }}
+                  >
+                    <ChevronLeft size={24} color="#FFFFFF" />
+                  </TouchableOpacity>
+                )}
+
+                {/* Right Arrow Button */}
+                {detailProductImages.length > 1 && previewImageIndex < detailProductImages.length - 1 && (
+                  <TouchableOpacity
+                    style={[styles.navArrowBtn, styles.navArrowRight]}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      const nextIdx = previewImageIndex + 1;
+                      setPreviewImageIndex(nextIdx);
+                      imageSliderRef.current?.scrollToIndex({ index: nextIdx, animated: true });
+                    }}
+                  >
+                    <ChevronRight size={24} color="#FFFFFF" />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Bottom Thumbnail Strip for easy jumping */}
+              {detailProductImages.length > 1 && (
+                <View style={styles.thumbnailStripWrap}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.thumbnailStripContent}
+                  >
+                    {detailProductImages.map((uri, idx) => {
+                      const isSelected = idx === previewImageIndex;
+                      return (
+                        <TouchableOpacity
+                          key={idx}
+                          activeOpacity={0.7}
+                          onPress={() => {
+                            setPreviewImageIndex(idx);
+                            imageSliderRef.current?.scrollToIndex({ index: idx, animated: true });
+                          }}
+                          style={[
+                            styles.stripThumbBtn,
+                            isSelected && styles.stripThumbBtnActive,
+                          ]}
+                        >
+                          <Image source={{ uri }} style={styles.stripThumbImg} resizeMode="cover" />
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              )}
+
+              {/* Instructions pill */}
+              <View style={styles.swipeHintWrap}>
+                <Text style={styles.swipeHintText}>
+                  {detailProductImages.length > 1
+                    ? 'Swipe left or right to view all product photos'
+                    : 'Tap X to return to product details'}
+                </Text>
+              </View>
+            </View>
+          )}
         </View>
       </Modal>
 
@@ -1810,72 +2250,7 @@ export default function ProductsScreen() {
         </View>
       </Modal>
 
-      {/* Pricing Editing Modal */}
-      <Modal visible={priceModalVisible} animationType="slide" transparent>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Manage Variant Price</Text>
-            {selectedProduct && selectedVariant && (
-              <Text style={styles.modalSubtitle}>
-                {(typeof selectedProduct.brand === 'object' ? (selectedProduct.brand as any)?.name : selectedProduct.brand) || 'Product'} - {typeof selectedVariant.color === 'object' ? (selectedVariant.color as any)?.name || '' : selectedVariant.color}
-              </Text>
-            )}
 
-            <ScrollView style={styles.modalForm} keyboardShouldPersistTaps="handled">
-              <View style={styles.modalInputWrapper}>
-                <Text style={styles.inputLabel}>MRP (Maximum Retail Price)</Text>
-                <TextInput
-                  style={styles.modalInput}
-                  value={mrpInput}
-                  keyboardType="numeric"
-                  placeholder="e.g. 1299"
-                  placeholderTextColor="#94A3B8"
-                  onChangeText={setMrpInput}
-                />
-              </View>
-
-              <View style={[styles.modalInputWrapper, { marginTop: 12 }]}>
-                <Text style={styles.inputLabel}>Selling Price</Text>
-                <TextInput
-                  style={styles.modalInput}
-                  value={priceInput}
-                  keyboardType="numeric"
-                  placeholder="e.g. 999"
-                  placeholderTextColor="#94A3B8"
-                  onChangeText={setPriceInput}
-                />
-              </View>
-
-              <View style={[styles.modalInputWrapper, { marginTop: 12 }]}>
-                <Text style={styles.inputLabel}>Discount (%)</Text>
-                <TextInput
-                  style={styles.modalInput}
-                  value={discountInput}
-                  keyboardType="numeric"
-                  placeholder="e.g. 15"
-                  placeholderTextColor="#94A3B8"
-                  onChangeText={setDiscountInput}
-                />
-              </View>
-            </ScrollView>
-
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalCancelBtn]}
-                onPress={() => setPriceModalVisible(false)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.modalSaveBtn]}
-                onPress={handleSavePrice}
-              >
-                <Text style={styles.modalSaveText}>Save Price</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* Floating Filter Button (Always Accessible while scrolling) */}
       <TouchableOpacity
@@ -2338,6 +2713,46 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 40,
     lineHeight: 18,
+  },
+  emptyIconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  emptyAddBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1E293B',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    marginTop: 20,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  emptyAddBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  clearFiltersBtn: {
+    marginTop: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+  },
+  clearFiltersBtnText: {
+    color: '#3B82F6',
+    fontSize: 13,
+    fontWeight: '600',
   },
   modalOverlay: {
     flex: 1,
@@ -3456,5 +3871,262 @@ const styles = StyleSheet.create({
     borderColor: '#BFDBFE',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  pricePenBtnActive: {
+    backgroundColor: '#2563EB',
+    borderColor: '#1D4ED8',
+  },
+  inlinePriceEditBox: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#3B82F6',
+    padding: 10,
+    marginTop: 6,
+    marginBottom: 10,
+  },
+  inlinePriceHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  inlinePriceBoxTitle: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: '#1E40AF',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  inlinePriceInputsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  inlinePriceField: {
+    flex: 1,
+  },
+  inlinePriceFieldLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 3,
+  },
+  inlinePriceInput: {
+    height: 40,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    paddingVertical: 0,
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+  },
+  inlinePriceActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  inlinePriceCancelBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  inlinePriceCancelText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  inlinePriceSaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#16A34A',
+  },
+  inlinePriceSaveText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  // Fullscreen Image Preview Modal Overlay Styles
+  imageViewerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.96)',
+    zIndex: 99999,
+    elevation: 20,
+    justifyContent: 'space-between',
+    paddingTop: Platform.OS === 'ios' ? 50 : 36,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+  },
+  imageViewerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  imageViewerCloseBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageViewerHeaderInfo: {
+    flex: 1,
+    marginHorizontal: 12,
+  },
+  imageViewerTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  imageViewerSub: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94A3B8',
+    marginTop: 2,
+  },
+  imageViewerCounterBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  imageViewerCounterText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  imageViewerSwiperWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  imageSlideWrap: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bigImage: {
+    borderRadius: 12,
+  },
+  navArrowBtn: {
+    position: 'absolute',
+    top: '46%',
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  navArrowLeft: {
+    left: 12,
+  },
+  navArrowRight: {
+    right: 12,
+  },
+  thumbnailStripWrap: {
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  thumbnailStripContent: {
+    paddingHorizontal: 16,
+    gap: 8,
+    alignItems: 'center',
+  },
+  stripThumbBtn: {
+    width: 46,
+    height: 56,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'transparent',
+    backgroundColor: '#1E293B',
+  },
+  stripThumbBtnActive: {
+    borderColor: '#3B82F6',
+    transform: [{ scale: 1.08 }],
+  },
+  stripThumbImg: {
+    width: '100%',
+    height: '100%',
+  },
+  swipeHintWrap: {
+    alignItems: 'center',
+    paddingTop: 4,
+  },
+  swipeHintText: {
+    fontSize: 11,
+    color: '#94A3B8',
+    fontWeight: '500',
+  },
+  detailThumbWrap: {
+    position: 'relative',
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  zoomBadge: {
+    position: 'absolute',
+    bottom: 3,
+    right: 3,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  thumbCountBadge: {
+    position: 'absolute',
+    top: 3,
+    right: 3,
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 6,
+  },
+  thumbCountText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  variantImagesWrap: {
+    marginVertical: 6,
+  },
+  variantThumbCard: {
+    width: 44,
+    height: 54,
+    borderRadius: 6,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#FFFFFF',
+  },
+  variantThumbCardImg: {
+    width: '100%',
+    height: '100%',
   },
 });

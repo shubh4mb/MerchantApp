@@ -17,7 +17,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '../context/AuthContext';
 import api, { createProductFull, analyzeProductWithAi } from '../utils/api';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Check, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Plus, Trash2, Camera, Tag, DollarSign, Package, Layers, X, Search, Sparkles, Image as ImageIcon } from 'lucide-react-native';
 
 interface Category {
@@ -167,37 +167,43 @@ export default function AddProductScreen() {
 
       const filename = uri.split('/').pop() || `ai_prod_${Date.now()}.jpg`;
       const match = /\.(\w+)$/.exec(filename);
-      let type = 'image/jpeg';
-      if (match) {
-        const ext = match[1].toLowerCase();
-        if (ext === 'png') type = 'image/png';
-        else if (ext === 'webp') type = 'image/webp';
-        else if (ext === 'gif') type = 'image/gif';
-        else type = 'image/jpeg';
-      }
+      let ext = match ? match[1].toLowerCase() : 'jpg';
+      if (ext === 'jpeg') ext = 'jpg';
+      const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : ext === 'gif' ? 'image/gif' : 'image/jpeg';
+      const cleanFilename = filename.includes('.') ? filename : `${filename}.${ext}`;
 
       let metadata;
-      let base64 = initialBase64;
-      if (!base64) {
-        try {
-          base64 = await FileSystem.readAsStringAsync(uri, {
-            encoding: 'base64',
-          });
-        } catch (readErr) {
-          console.warn('Could not read base64 via FileSystem, using FormData fallback:', readErr);
-        }
-      }
 
-      if (base64) {
-        metadata = await analyzeProductWithAi({ image: base64, mimeType: type });
-      } else {
+      // Primary strategy: FormData (fast, native direct streaming without huge JS heap strings)
+      try {
         const formData = new FormData();
         formData.append('image', {
           uri,
-          name: filename.includes('.') ? filename : `${filename}.jpg`,
-          type,
+          name: cleanFilename,
+          type: mimeType,
         } as any);
+
         metadata = await analyzeProductWithAi(formData);
+      } catch (formErr: any) {
+        console.warn('FormData AI analysis failed, trying base64 fallback:', formErr?.message || formErr);
+
+        // Fallback strategy: Base64 JSON
+        let base64 = initialBase64;
+        if (!base64) {
+          try {
+            base64 = await FileSystem.readAsStringAsync(uri, {
+              encoding: 'base64',
+            });
+          } catch (readErr) {
+            console.warn('Could not read base64 via FileSystem:', readErr);
+          }
+        }
+
+        if (base64) {
+          metadata = await analyzeProductWithAi({ image: base64, mimeType });
+        } else {
+          throw formErr;
+        }
       }
 
       if (!metadata) {
@@ -209,27 +215,39 @@ export default function AddProductScreen() {
       if (metadata.styleName) setStyleName(metadata.styleName);
       if (metadata.description) setDescription(metadata.description);
 
+      // Ensure categories list is available for matching
+      let activeCategories = categories;
+      if (!activeCategories || activeCategories.length === 0) {
+        try {
+          const catRes = await api.get('/merchant/getCategories');
+          activeCategories = catRes.data?.categories || catRes.data || [];
+          setCategories(activeCategories);
+        } catch {
+          // ignore
+        }
+      }
+
       // Match parent & sub category
-      const matchParent = categories.find(
+      const matchParent = activeCategories.find(
         (c) =>
           c.level === 0 &&
-          (c._id === metadata.categoryId ||
-            c.name.toLowerCase() === metadata.category?.toLowerCase())
+          (String(c._id) === String(metadata.categoryId) ||
+            c.name?.trim().toLowerCase() === metadata.category?.trim().toLowerCase())
       );
       if (matchParent) {
         setSelectedParentCategory(matchParent._id);
       }
 
-      const matchSub = categories.find(
+      const matchSub = activeCategories.find(
         (c) =>
           c.level === 1 &&
-          (c._id === metadata.subCategoryId ||
-            c.name.toLowerCase() === metadata.subCategory?.toLowerCase())
+          (String(c._id) === String(metadata.subCategoryId) ||
+            c.name?.trim().toLowerCase() === metadata.subCategory?.trim().toLowerCase())
       );
       if (matchSub) {
         setSelectedSubCategory(matchSub._id);
         if (!matchParent && matchSub.parentId) {
-          setSelectedParentCategory(String(matchSub.parentId));
+          setSelectedParentCategory(String((matchSub.parentId as any)?._id || matchSub.parentId));
         }
       }
 
@@ -308,14 +326,14 @@ export default function AddProductScreen() {
           result = await ImagePicker.launchCameraAsync({
             allowsEditing: true,
             aspect: [4, 5],
-            quality: 0.8,
+            quality: 0.5,
             base64: true,
           });
         } else {
           result = await ImagePicker.launchImageLibraryAsync({
             allowsEditing: true,
             aspect: [4, 5],
-            quality: 0.8,
+            quality: 0.5,
             base64: true,
           });
         }
@@ -369,7 +387,7 @@ export default function AddProductScreen() {
             const result = await ImagePicker.launchCameraAsync({
               allowsEditing: true,
               aspect: [4, 5],
-              quality: 0.8,
+              quality: 0.7,
             });
             if (!result.canceled && result.assets?.[0]?.uri) {
               setSelectedImages([...selectedImages, result.assets[0].uri]);
@@ -382,7 +400,7 @@ export default function AddProductScreen() {
             const result = await ImagePicker.launchImageLibraryAsync({
               allowsEditing: true,
               aspect: [4, 5],
-              quality: 0.8,
+              quality: 0.7,
             });
             if (!result.canceled && result.assets?.[0]?.uri) {
               setSelectedImages([...selectedImages, result.assets[0].uri]);
@@ -653,10 +671,10 @@ export default function AddProductScreen() {
           {/* Sub Category */}
           {selectedParentCategory ? (
             <>
-              <Text style={styles.label}>Sub Category * <Text style={{ fontSize: 11, color: '#DC2626', fontWeight: '600' }}>(Required)</Text></Text>
+              <Text style={styles.label}>Sub Category * {!selectedSubCategory && <Text style={{ fontSize: 11, color: '#DC2626', fontWeight: '600' }}>(Required)</Text>}</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipRow}>
                 {subCategories.map((cat) => {
-                  const isSelected = selectedSubCategory === cat._id;
+                  const isSelected = String(selectedSubCategory) === String(cat._id);
                   return (
                     <TouchableOpacity
                       key={cat._id}
@@ -1163,7 +1181,7 @@ export default function AddProductScreen() {
                     onPress={async () => {
                       const perm = await ImagePicker.requestCameraPermissionsAsync();
                       if (!perm.granted) return Alert.alert('Permission Denied', 'Camera access is required.');
-                      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [4, 5], quality: 0.8 });
+                      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [4, 5], quality: 0.7 });
                       if (!result.canceled && result.assets?.[0]?.uri) {
                         setSelectedImages([...selectedImages, result.assets[0].uri]);
                       }
@@ -1178,7 +1196,7 @@ export default function AddProductScreen() {
                     onPress={async () => {
                       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
                       if (!perm.granted) return Alert.alert('Permission Denied', 'Gallery access is required.');
-                      const result = await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, aspect: [4, 5], quality: 0.8 });
+                      const result = await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, aspect: [4, 5], quality: 0.7 });
                       if (!result.canceled && result.assets?.[0]?.uri) {
                         setSelectedImages([...selectedImages, result.assets[0].uri]);
                       }

@@ -68,9 +68,13 @@ export default function MatchingProductsScreen() {
         const filtered = productList.filter(p => p.styleGroupId !== prod.styleGroupId && p.styleGroupId !== id);
         setProducts(filtered);
 
-      } catch (err) {
-        console.error('Failed to load products:', err);
-        Alert.alert('Error', 'Failed to retrieve products for matching.');
+      } catch (err: any) {
+        if (err?.response?.status === 404) {
+          setProducts([]);
+        } else {
+          console.error('Failed to load products:', err);
+          Alert.alert('Error', 'Failed to retrieve products for matching.');
+        }
       } finally {
         setLoading(false);
       }

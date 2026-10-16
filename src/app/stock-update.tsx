@@ -72,8 +72,14 @@ export default function StockQuickUpdateScreen() {
         });
       });
       setStockInputs(initialStockMap);
-    } catch (err) {
-      console.error('Failed to load products for stock update:', err);
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        setProducts([]);
+        setFilteredProducts([]);
+        setStockInputs({});
+      } else {
+        console.error('Failed to load products for stock update:', err);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);

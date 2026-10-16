@@ -197,10 +197,14 @@ export const createProductFull = async (formData: FormData) => {
 };
 
 export const analyzeProductWithAi = async (data: FormData | { image: string; mimeType?: string }) => {
-  const isFormData = data instanceof FormData;
+  const isFormData =
+    (typeof FormData !== 'undefined' && data instanceof FormData) ||
+    Boolean(data && typeof (data as any).append === 'function');
+
   const res = await api.post('/merchant/products/ai-analyze', data, {
-    headers: isFormData ? undefined : { 'Content-Type': 'application/json' },
-    transformRequest: isFormData ? (d) => d : undefined,
+    headers: {
+      'Content-Type': isFormData ? 'multipart/form-data' : 'application/json',
+    },
     timeout: 60000,
   });
   return res.data?.data ?? res.data;
