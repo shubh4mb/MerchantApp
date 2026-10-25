@@ -31,8 +31,19 @@ export default function LoginScreen() {
     setError('');
     setLoading(true);
     try {
-      await login(email.trim().toLowerCase(), password);
-      router.replace('/(tabs)/orders');
+      const loggedInMerchant = await login(email.trim().toLowerCase(), password);
+
+      if (loggedInMerchant.isActive || loggedInMerchant.status === 'active') {
+        router.replace('/(tabs)/orders');
+      } else if (loggedInMerchant.status === 'pending_payment') {
+        router.replace('/payment');
+      } else if (loggedInMerchant.status === 'pending_verification' || loggedInMerchant.status === 'payment_pending_verification') {
+        router.replace('/pending-verification');
+      } else if (loggedInMerchant.status === 'rejected') {
+        router.replace('/rejected');
+      } else {
+        router.replace('/onboarding');
+      }
     } catch (err: any) {
       setError(err.message || 'Login failed. Please check credentials.');
     } finally {

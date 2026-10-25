@@ -352,8 +352,8 @@ export default function AddProductScreen() {
       await launchPicker(source);
     } else {
       Alert.alert(
-        '✨ Gemini AI Smart Auto-Fill',
-        'Choose product photo source for Gemini AI to analyze:',
+        '✨ AI Smart Auto-Fill',
+        'Choose product photo source for AI to analyze:',
         [
           { text: '📷 Camera', onPress: () => launchPicker('camera') },
           { text: '🖼️ Gallery', onPress: () => launchPicker('gallery') },
@@ -387,7 +387,7 @@ export default function AddProductScreen() {
             const result = await ImagePicker.launchCameraAsync({
               allowsEditing: true,
               aspect: [4, 5],
-              quality: 0.7,
+              quality: 0.4,
             });
             if (!result.canceled && result.assets?.[0]?.uri) {
               setSelectedImages([...selectedImages, result.assets[0].uri]);
@@ -400,20 +400,12 @@ export default function AddProductScreen() {
             const result = await ImagePicker.launchImageLibraryAsync({
               allowsEditing: true,
               aspect: [4, 5],
-              quality: 0.7,
+              quality: 0.4,
             });
             if (!result.canceled && result.assets?.[0]?.uri) {
               setSelectedImages([...selectedImages, result.assets[0].uri]);
             }
           },
-        },
-        {
-          text: '✨ Auto-Fill via Camera (AI)',
-          onPress: () => handlePickAndAnalyzeAi('camera'),
-        },
-        {
-          text: '✨ Auto-Fill via Gallery (AI)',
-          onPress: () => handlePickAndAnalyzeAi('gallery'),
         },
         { text: 'Cancel', style: 'cancel' },
       ]
@@ -562,7 +554,7 @@ export default function AddProductScreen() {
           </View>
         ) : null}
 
-        {/* ✨ GEMINI AI AUTO-FILL HERO CARD */}
+        {/* ✨ AI AUTO-FILL HERO CARD */}
         <View style={styles.aiCard}>
           <View style={styles.aiCardHeader}>
             <View style={styles.aiIconBadge}>
@@ -570,7 +562,7 @@ export default function AddProductScreen() {
             </View>
             <View style={{ flex: 1, marginLeft: 10 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Text style={styles.aiCardTitle}>Gemini AI Auto-Fill</Text>
+                <Text style={styles.aiCardTitle}>AI Auto-Fill</Text>
                 <View style={styles.aiFastBadge}>
                   <Text style={styles.aiFastBadgeText}>AI ⚡</Text>
                 </View>
@@ -585,7 +577,7 @@ export default function AddProductScreen() {
             <View style={styles.aiAnalyzingBox}>
               <ActivityIndicator size="small" color="#7C3AED" />
               <View style={{ marginLeft: 10 }}>
-                <Text style={styles.aiAnalyzingText}>Analyzing garment with Gemini AI...</Text>
+                <Text style={styles.aiAnalyzingText}>Analyzing garment with AI...</Text>
                 <Text style={styles.aiAnalyzingSubtext}>Recognizing style, category & color specs</Text>
               </View>
             </View>
@@ -1155,16 +1147,6 @@ export default function AddProductScreen() {
                     )}
                   </View>
 
-                  {/* AI Analyze this specific image button */}
-                  <TouchableOpacity
-                    style={styles.aiImageAnalyzeBtn}
-                    onPress={() => runAiAnalysisOnUri(uri)}
-                    disabled={analyzingAi}
-                  >
-                    <Sparkles size={10} color="#FFFFFF" />
-                    <Text style={styles.aiImageAnalyzeBtnText}>AI</Text>
-                  </TouchableOpacity>
-
                   <TouchableOpacity
                     style={styles.removeImageBtn}
                     onPress={() => handleRemoveImage(index)}
@@ -1175,52 +1157,10 @@ export default function AddProductScreen() {
               ))}
 
               {selectedImages.length < 4 ? (
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <TouchableOpacity
-                    style={styles.addPhotoBtn}
-                    onPress={async () => {
-                      const perm = await ImagePicker.requestCameraPermissionsAsync();
-                      if (!perm.granted) return Alert.alert('Permission Denied', 'Camera access is required.');
-                      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [4, 5], quality: 0.7 });
-                      if (!result.canceled && result.assets?.[0]?.uri) {
-                        setSelectedImages([...selectedImages, result.assets[0].uri]);
-                      }
-                    }}
-                  >
-                    <Camera size={20} color="#1E293B" />
-                    <Text style={styles.addPhotoText}>Camera</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.addPhotoBtn}
-                    onPress={async () => {
-                      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-                      if (!perm.granted) return Alert.alert('Permission Denied', 'Gallery access is required.');
-                      const result = await ImagePicker.launchImageLibraryAsync({ allowsEditing: true, aspect: [4, 5], quality: 0.7 });
-                      if (!result.canceled && result.assets?.[0]?.uri) {
-                        setSelectedImages([...selectedImages, result.assets[0].uri]);
-                      }
-                    }}
-                  >
-                    <ImageIcon size={20} color="#1E293B" />
-                    <Text style={styles.addPhotoText}>Gallery</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.addPhotoBtn, { borderColor: '#A78BFA', backgroundColor: '#F5F3FF' }]}
-                    onPress={() => handlePickAndAnalyzeAi()}
-                    disabled={analyzingAi}
-                  >
-                    {analyzingAi ? (
-                      <ActivityIndicator size="small" color="#7C3AED" />
-                    ) : (
-                      <>
-                        <Sparkles size={20} color="#7C3AED" />
-                        <Text style={[styles.addPhotoText, { color: '#7C3AED' }]}>AI Auto-Fill</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                </View>
+                <TouchableOpacity style={styles.addPhotoBtn} onPress={handlePickPhoto}>
+                  <Plus size={24} color="#475569" />
+                  <Text style={styles.addPhotoText}>Add Photo</Text>
+                </TouchableOpacity>
               ) : null}
             </ScrollView>
           </View>

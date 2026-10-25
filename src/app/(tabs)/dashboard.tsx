@@ -53,7 +53,7 @@ interface Transaction {
 }
 
 export default function DashboardScreen() {
-  const { merchant } = useAuth();
+  const { merchant, checkAuthSession } = useAuth();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -76,6 +76,11 @@ export default function DashboardScreen() {
   const loadDashboardData = async () => {
     try {
       if (!merchant?.id) return;
+
+      // Ensure merchant online status and profile are up to date directly from DB
+      checkAuthSession().catch((err) =>
+        console.warn('Silent refresh of merchant session failed:', err)
+      );
       
       // Fetch Analytics
       const analyticsRes = await api.get('/merchant/analytics');

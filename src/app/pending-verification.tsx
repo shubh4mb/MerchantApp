@@ -73,16 +73,18 @@ export default function PendingVerificationScreen() {
           {checking ? (
             <ActivityIndicator color="#FFFFFF" />
           ) : (
-            <>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <RefreshCw size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
               <Text style={styles.checkBtnText}>Check Status</Text>
-            </>
+            </View>
           )}
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
-          <LogOut size={18} color="#475569" style={{ marginRight: 8 }} />
-          <Text style={styles.logoutBtnText}>Log Out</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <LogOut size={18} color="#475569" style={{ marginRight: 8 }} />
+            <Text style={styles.logoutBtnText}>Log Out</Text>
+          </View>
         </TouchableOpacity>
       </View>
     </View>

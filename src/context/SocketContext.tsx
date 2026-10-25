@@ -50,7 +50,7 @@ const SocketContext = createContext<SocketContextType>({
 });
 
 export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { merchant } = useAuth();
+  const { merchant, updateMerchantState } = useAuth();
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [incomingOrder, setIncomingOrder] = useState<any | null>(null);
@@ -149,9 +149,10 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Register merchant room on every connect/reconnect
       socketInstance.emit('registerMerchant', String(merchantId));
       
-      // If merchant also has a warehouse attached, register warehouse room
+      // Only register warehouse room if account is a warehouse account
+      const isWarehouseAccount = (merchant as any)?.accountType === 'warehouse';
       const whId = (merchant as any)?.warehouseId || (merchant as any)?.assignedWarehouse;
-      if (whId) {
+      if (isWarehouseAccount && whId) {
         console.log('✅ Also registering warehouse room:', whId);
         socketInstance.emit('registerWarehouse', String(whId));
       }
@@ -176,14 +177,45 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     // Central handler for new orders (both standard & warehouse consigned orders)
+    // Central handler for new orders (both standard & warehouse consigned orders)
     const handleIncomingOrder = async (rawPayload: any) => {
       console.log('📩 Incoming order socket payload received:', rawPayload);
-      const order = rawPayload?.order || rawPayload;
+      const order = rawPayload?.order || rawPayload?.data || rawPayload;
       const orderId = order?._id || order?.orderId || order?.id;
 
       if (!orderId) {
         console.log('📩 Non-order payload received, ignoring:', rawPayload);
         return;
+      }
+
+      // Safe extraction helper to prevent "[object Object]" false comparisons
+      const extractId = (val: any) => {
+        if (!val) return '';
+        if (typeof val === 'string') return val.trim().toLowerCase();
+        if (typeof val === 'object') {
+          return String(val._id || val.id || '').trim().toLowerCase();
+        }
+        return String(val).trim().toLowerCase();
+      };
+
+      // 🛡️ Strict ownership guard: Only alert for orders belonging to this merchant/warehouse
+      const myId = String(merchantId || '').trim().toLowerCase();
+      const myWarehouseId = String((merchant as any)?.warehouseId || '').trim().toLowerCase();
+      const isWarehouse = (merchant as any)?.accountType === 'warehouse';
+
+      const orderMerchantId = extractId(order?.merchantId) || extractId(order?.sourceMerchantId);
+      const orderWarehouseId = extractId(order?.warehouseId);
+
+      if (isWarehouse) {
+        if (myWarehouseId && orderWarehouseId && orderWarehouseId !== myWarehouseId) {
+          console.log(`🛡️ SocketContext: Ignored newOrder for warehouse #${orderWarehouseId} (my warehouse is #${myWarehouseId})`);
+          return;
+        }
+      } else {
+        if (myId && orderMerchantId && orderMerchantId !== myId) {
+          console.log(`🛡️ SocketContext: Ignored newOrder for merchant #${orderMerchantId} (my merchant is #${myId})`);
+          return;
+        }
       }
 
       const normalizedOrder = {
@@ -203,19 +235,19 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         console.warn('Audio alert error:', err);
       }
 
-      // Trigger local OS notification banner
+      // Trigger local OS notification banner with correct Expo Notifications trigger
       try {
         await Notifications.scheduleNotificationAsync({
           content: {
             title: 'New Order Received! 🛍️',
             body: `Order #${String(orderId).slice(-6).toUpperCase()} has been placed. Prepare items.`,
-            sound: true,
-            priority: 'max',
+            sound: 'default',
+            priority: Notifications.AndroidNotificationPriority.MAX,
             vibrate: [0, 500, 200, 500],
-          },
-          trigger: {
             channelId: 'order_alerts',
-          } as any,
+            data: { orderId: String(orderId) },
+          },
+          trigger: null,
         });
       } catch (err) {
         console.error('Local notification sound trigger error:', err);
@@ -224,6 +256,19 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     socketInstance.on('newOrder', handleIncomingOrder);
     socketInstance.on('newWarehouseOrder', handleIncomingOrder);
+
+    // Also listen to general notification events (e.g. from notifyMerchant)
+    socketInstance.on('notification', (payload: any) => {
+      console.log('📩 Notification socket event received in SocketContext:', payload);
+      if (
+        payload?.type === 'new_order_placed' ||
+        payload?.type === 'newOrder' ||
+        payload?.orderId ||
+        payload?.data?.orderId
+      ) {
+        handleIncomingOrder(payload?.data || payload);
+      }
+    });
 
     // Handle order cancelled notification
     socketInstance.on('orderCancelled', async (data: any) => {
@@ -248,6 +293,14 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         });
       } catch (err) {
         console.error('Local notification for cancelled order error:', err);
+      }
+    });
+
+    // Real-time synchronization: listen for status changes from website or admin
+    socketInstance.on('onlineStatusUpdated', (data: any) => {
+      if (data && String(data.merchantId) === String(merchantId)) {
+        console.log('⚡ Received live onlineStatusUpdated from socket:', data.isOnline);
+        updateMerchantState({ isOnline: Boolean(data.isOnline) });
       }
     });
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,13 +12,29 @@ import {
   Platform,
   Image,
   Switch,
+  Modal,
+  Animated,
+  Dimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import api from '@/utils/api';
 import * as ImagePicker from 'expo-image-picker';
-import { Camera, Check, ChevronLeft, ChevronRight, MapPin, Upload } from 'lucide-react-native';
-import MapView, { Marker } from 'react-native-maps';
+import * as Location from 'expo-location';
+import {
+  Camera,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  MapPin,
+  Upload,
+  Locate,
+  Maximize2,
+  X,
+  Search,
+  ExternalLink,
+} from 'lucide-react-native';
+import MapView, { Marker, Region } from 'react-native-maps';
 
 const STEPS = [
   { id: 1, title: 'Shop Details' },
@@ -73,6 +89,24 @@ export default function OnboardingScreen() {
   const [enableCourier, setEnableCourier] = useState(false);
   const [shipsWithinHours, setShipsWithinHours] = useState('24');
   const [acceptsReturns, setAcceptsReturns] = useState(true);
+
+  // Map Navigation & Drag States
+  const mapRef = useRef<MapView>(null);
+  const fullMapRef = useRef<MapView>(null);
+  const [parentScrollEnabled, setParentScrollEnabled] = useState(true);
+  const [isMapPanning, setIsMapPanning] = useState(false);
+  const [isLocating, setIsLocating] = useState(false);
+  const [showFullMapModal, setShowFullMapModal] = useState(false);
+  const pinLiftAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.spring(pinLiftAnim, {
+      toValue: isMapPanning ? -14 : 0,
+      useNativeDriver: true,
+      friction: 6,
+      tension: 90,
+    }).start();
+  }, [isMapPanning]);
 
   // Step 2: Bank details
   const [bankName, setBankName] = useState('');
@@ -171,76 +205,197 @@ export default function OnboardingScreen() {
     loadMerchantData();
   }, [merchant?.id]);
 
-  // Location auto-detection & reverse-geocoding
-  const handleDetectLocation = async () => {
+  // Reverse geocoding helper (Native first, fallback to OSM Nominatim)
+  const reverseGeocode = async (lat: number, lng: number) => {
     try {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          const lat = position.coords.latitude;
-          const lng = position.coords.longitude;
-          setLatitude(lat.toString());
-          setLongitude(lng.toString());
-          
-          try {
-            const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
-            const data = await response.json();
-            if (data && data.address) {
-              setStreet(data.address.road || data.address.suburb || data.address.neighbourhood || street);
-              setCity(data.address.city || data.address.town || data.address.county || city);
-              setState(data.address.state || state);
-              setPostalCode(data.address.postcode || postalCode);
-              Alert.alert('Success', 'Location coordinates detected and address populated automatically!');
-            } else {
-              Alert.alert('Success', `Coordinates: ${lat.toFixed(5)}, ${lng.toFixed(5)} detected.`);
-            }
-          } catch (geoErr) {
-            console.warn("Reverse geocode failed:", geoErr);
-            Alert.alert('Success', `Coordinates: ${lat.toFixed(5)}, ${lng.toFixed(5)} detected.`);
-          }
-        },
-        (err) => {
-          Alert.alert('Location Error', 'Unable to retrieve GPS coordinates. Please search for your location using the search box.');
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+      if (Platform.OS !== 'web') {
+        const addresses = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng });
+        if (addresses && addresses.length > 0) {
+          const addr = addresses[0];
+          const streetParts = [
+            addr.streetNumber,
+            addr.street || addr.name,
+            addr.district,
+            addr.subregion && addr.subregion !== addr.city ? addr.subregion : null,
+          ].filter(Boolean);
+          if (streetParts.length > 0) setStreet(streetParts.join(', '));
+          if (addr.city) setCity(addr.city);
+          if (addr.region) setState(addr.region);
+          if (addr.postalCode) setPostalCode(addr.postalCode);
+          return;
+        }
+      }
+    } catch (_) {}
+
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+        { headers: { 'User-Agent': 'FlashFitsMerchantApp/1.0', 'Accept-Language': 'en' } }
       );
+      const data = await response.json();
+      if (data && data.address) {
+        const addr = data.address;
+        const streetVal = [addr.house_number, addr.road || addr.suburb || addr.neighbourhood || addr.residential]
+          .filter(Boolean)
+          .join(' ');
+        const cityVal = addr.city || addr.town || addr.village || addr.county || '';
+        const stateVal = addr.state || '';
+        const postalCodeVal = addr.postcode || '';
+
+        if (streetVal) setStreet(streetVal);
+        if (cityVal) setCity(cityVal);
+        if (stateVal) setState(stateVal);
+        if (postalCodeVal) setPostalCode(postalCodeVal);
+      }
     } catch (err) {
-      Alert.alert('Notice', 'GPS detection is unsupported or permissions are disabled. Please use search.');
+      console.warn('Reverse geocode error:', err);
+    }
+  };
+
+  // Location auto-detection using native device GPS
+  const handleDetectLocation = async () => {
+    setIsLocating(true);
+    try {
+      if (Platform.OS === 'web') {
+        if (typeof navigator !== 'undefined' && 'geolocation' in navigator) {
+          navigator.geolocation.getCurrentPosition(
+            async (pos) => {
+              const lat = pos.coords.latitude;
+              const lng = pos.coords.longitude;
+              setLatitude(lat.toFixed(6));
+              setLongitude(lng.toFixed(6));
+              await reverseGeocode(lat, lng);
+              setIsLocating(false);
+            },
+            () => {
+              Alert.alert('GPS Notice', 'Could not detect browser location.');
+              setIsLocating(false);
+            },
+            { enableHighAccuracy: true, timeout: 15000 }
+          );
+        } else {
+          setIsLocating(false);
+        }
+        return;
+      }
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Location Permission Required',
+          'Please grant location permissions to detect your store GPS coordinates.'
+        );
+        setIsLocating(false);
+        return;
+      }
+
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const lat = loc.coords.latitude;
+      const lng = loc.coords.longitude;
+      setLatitude(lat.toFixed(6));
+      setLongitude(lng.toFixed(6));
+
+      const region = {
+        latitude: lat,
+        longitude: lng,
+        latitudeDelta: 0.004,
+        longitudeDelta: 0.004,
+      };
+
+      mapRef.current?.animateToRegion(region, 600);
+      fullMapRef.current?.animateToRegion(region, 600);
+
+      await reverseGeocode(lat, lng);
+    } catch (err: any) {
+      console.warn('GPS detection failed:', err);
+      Alert.alert('GPS Notice', 'Could not detect GPS location. You can search your address or pan the map directly.');
+    } finally {
+      setIsLocating(false);
     }
   };
 
   const handleSearchAddress = async () => {
-    if (!searchQuery.trim()) {
-      Alert.alert('Search Place', 'Please enter an address or landmark to search.');
+    const q = searchQuery.trim();
+    if (!q) {
+      Alert.alert('Search Place', 'Please enter a shop location or area to search.');
       return;
     }
     setIsSearching(true);
     try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}`);
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=in&limit=1`,
+        { headers: { 'User-Agent': 'FlashFitsMerchantApp/1.0', 'Accept-Language': 'en' } }
+      );
       const data = await response.json();
       if (data && data.length > 0) {
-        const firstMatch = data[0];
-        const lat = parseFloat(firstMatch.lat);
-        const lng = parseFloat(firstMatch.lon);
-        setLatitude(lat.toString());
-        setLongitude(lng.toString());
+        const match = data[0];
+        const lat = parseFloat(match.lat);
+        const lng = parseFloat(match.lon);
+        setLatitude(lat.toFixed(6));
+        setLongitude(lng.toFixed(6));
 
-        // Reverse geocode
-        const revResponse = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
-        const revData = await revResponse.json();
-        if (revData && revData.address) {
-          setStreet(revData.address.road || revData.address.suburb || revData.address.neighbourhood || street);
-          setCity(revData.address.city || revData.address.town || revData.address.county || city);
-          setState(revData.address.state || state);
-          setPostalCode(revData.address.postcode || postalCode);
-        }
-        Alert.alert('Place Found', `Set coordinates to: ${lat.toFixed(5)}, ${lng.toFixed(5)} and updated address details.`);
+        const region = {
+          latitude: lat,
+          longitude: lng,
+          latitudeDelta: 0.005,
+          longitudeDelta: 0.005,
+        };
+        mapRef.current?.animateToRegion(region, 600);
+        fullMapRef.current?.animateToRegion(region, 600);
+
+        await reverseGeocode(lat, lng);
       } else {
-        Alert.alert('Not Found', 'Location could not be found. Please try a different search query.');
+        Alert.alert('Not Found', 'Location not found. Try searching by landmark, market, or PIN code.');
       }
     } catch (err) {
-      Alert.alert('Search Error', 'Failed to perform geocoding lookup.');
+      console.warn('Search geocoding error:', err);
     } finally {
       setIsSearching(false);
+    }
+  };
+
+  const handleRegionChangeComplete = async (region: Region) => {
+    setIsMapPanning(false);
+    setParentScrollEnabled(true);
+    if (region && region.latitude && region.longitude) {
+      setLatitude(region.latitude.toFixed(6));
+      setLongitude(region.longitude.toFixed(6));
+      await reverseGeocode(region.latitude, region.longitude);
+    }
+  };
+
+  const handleMapPress = (e: any) => {
+    const coord = e?.nativeEvent?.coordinate;
+    if (coord?.latitude && coord?.longitude) {
+      const lat = coord.latitude;
+      const lng = coord.longitude;
+      setLatitude(lat.toFixed(6));
+      setLongitude(lng.toFixed(6));
+      const region = {
+        latitude: lat,
+        longitude: lng,
+        latitudeDelta: 0.004,
+        longitudeDelta: 0.004,
+      };
+      mapRef.current?.animateToRegion(region, 400);
+      fullMapRef.current?.animateToRegion(region, 400);
+      reverseGeocode(lat, lng);
+    }
+  };
+
+  const handleConfirmModalLocation = () => {
+    setShowFullMapModal(false);
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    if (!isNaN(lat) && !isNaN(lng)) {
+      setTimeout(() => {
+        mapRef.current?.animateToRegion({
+          latitude: lat,
+          longitude: lng,
+          latitudeDelta: 0.004,
+          longitudeDelta: 0.004,
+        }, 400);
+      }, 300);
     }
   };
 
@@ -500,7 +655,11 @@ export default function OnboardingScreen() {
         ))}
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        scrollEnabled={parentScrollEnabled}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
         {isPending && (
           <View style={styles.pendingBanner}>
             <Text style={styles.pendingBannerTitle}>⏳ Verification Pending</Text>
@@ -593,41 +752,71 @@ export default function OnboardingScreen() {
             </View>
 
             {/* Geolocation Section */}
-            <Text style={styles.label}>Shop Location Mapping *</Text>
-            <View style={styles.locationContainer}>
-              {/* Priority 1: Get Current Address / Locate Me */}
-              <TouchableOpacity style={styles.detectBtn} onPress={handleDetectLocation}>
-                <MapPin size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
-                <Text style={styles.detectBtnText}>Use GPS to Detect Location</Text>
-              </TouchableOpacity>
-
-              {/* Priority 2: Search Place / Address */}
-              <View style={[styles.row, { marginTop: 12 }]}>
-                <View style={{ flex: 1 }}>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Search for your shop address..."
-                    value={searchQuery}
-                    onChangeText={setSearchQuery}
-                  />
+            <View style={styles.locationHeaderRow}>
+              <Text style={styles.label}>Shop Location Mapping *</Text>
+              {latitude && longitude ? (
+                <View style={styles.liveCoordBadge}>
+                  <View style={styles.liveCoordDot} />
+                  <Text style={styles.liveCoordText}>Pin Set</Text>
                 </View>
+              ) : null}
+            </View>
+
+            <View style={styles.locationContainer}>
+              {/* Clean unified search & GPS bar */}
+              <View style={styles.mapSearchBar}>
+                <Search size={18} color="#64748B" style={{ marginLeft: 12, marginRight: 8 }} />
+                <TextInput
+                  style={styles.mapSearchInput}
+                  placeholder="Search market, area, landmark..."
+                  placeholderTextColor="#94A3B8"
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  onSubmitEditing={handleSearchAddress}
+                  returnKeyType="search"
+                />
+                {isSearching ? (
+                  <ActivityIndicator size="small" color="#0F172A" style={{ marginRight: 8 }} />
+                ) : (
+                  <TouchableOpacity
+                    style={styles.mapSearchActionBtn}
+                    onPress={handleSearchAddress}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.mapSearchActionText}>Search</Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity
-                  style={[styles.detectBtn, { height: 50, paddingHorizontal: 16, backgroundColor: '#1A1A1A', display: 'flex', alignItems: 'center', justifyContent: 'center' }]}
-                  onPress={handleSearchAddress}
-                  disabled={isSearching}
+                  style={[styles.mapGpsActionBtn, isLocating && styles.mapGpsActionBtnActive]}
+                  onPress={handleDetectLocation}
+                  disabled={isLocating}
+                  activeOpacity={0.7}
                 >
-                  {isSearching ? (
-                    <ActivityIndicator color="#FFFFFF" />
+                  {isLocating ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
-                    <Text style={styles.detectBtnText}>Search</Text>
+                    <Locate size={17} color="#FFFFFF" />
                   )}
                 </TouchableOpacity>
               </View>
 
-              {/* Priority 3: Pin on Map */}
-              {Platform.OS !== 'web' && latitude && longitude ? (
-                <View style={styles.mapWrapper}>
+              {/* Informative gesture guidance pill */}
+              <View style={styles.mapGuidePill}>
+                <Text style={styles.mapGuideText}>
+                  📍 Drag map to position pin at your store entrance, or tap anywhere on map
+                </Text>
+              </View>
+
+              {/* Interactive Map View Card */}
+              <View
+                style={styles.mapCard}
+                onTouchStart={() => setParentScrollEnabled(false)}
+                onTouchEnd={() => setParentScrollEnabled(true)}
+                onTouchCancel={() => setParentScrollEnabled(true)}
+              >
+                {Platform.OS !== 'web' ? (
                   <MapView
+                    ref={mapRef}
                     style={styles.map}
                     initialRegion={{
                       latitude: parseFloat(latitude) || 20.5937,
@@ -635,51 +824,89 @@ export default function OnboardingScreen() {
                       latitudeDelta: 0.005,
                       longitudeDelta: 0.005,
                     }}
-                    onPress={(e) => {
-                      const lat = e.nativeEvent.coordinate.latitude;
-                      const lng = e.nativeEvent.coordinate.longitude;
-                      setLatitude(lat.toString());
-                      setLongitude(lng.toString());
-                      
-                      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`)
-                        .then(res => res.json())
-                        .then(data => {
-                          if (data && data.address) {
-                            setStreet(data.address.road || data.address.suburb || data.address.neighbourhood || street);
-                            setCity(data.address.city || data.address.town || data.address.county || city);
-                            setState(data.address.state || state);
-                            setPostalCode(data.address.postcode || postalCode);
-                          }
-                        }).catch(() => {});
+                    showsUserLocation={true}
+                    showsMyLocationButton={false}
+                    showsCompass={true}
+                    rotateEnabled={true}
+                    scrollEnabled={true}
+                    zoomEnabled={true}
+                    onPanDrag={() => {
+                      setParentScrollEnabled(false);
+                      if (!isMapPanning) setIsMapPanning(true);
                     }}
+                    onRegionChange={() => {
+                      if (!isMapPanning) setIsMapPanning(true);
+                    }}
+                    onRegionChangeComplete={handleRegionChangeComplete}
+                    onPress={handleMapPress}
+                  />
+                ) : (
+                  <View style={styles.webFallbackBox}>
+                    <Text style={styles.webFallbackTitle}>📍 Shop Coordinates</Text>
+                    <Text style={styles.webFallbackCoords}>
+                      {latitude && longitude ? `${latitude}, ${longitude}` : 'No location detected yet'}
+                    </Text>
+                    <TouchableOpacity style={styles.webGpsBtn} onPress={handleDetectLocation}>
+                      <Text style={styles.webGpsBtnText}>Use Device GPS</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {/* Animated Fixed Center Pin */}
+                {Platform.OS !== 'web' && (
+                  <View style={styles.centerPinContainer} pointerEvents="none">
+                    <Animated.View
+                      style={[
+                        styles.centerPinWrapper,
+                        { transform: [{ translateY: pinLiftAnim }] },
+                      ]}
+                    >
+                      <View style={styles.pinTooltip}>
+                        <Text style={styles.pinTooltipText}>Store Pin</Text>
+                      </View>
+                      <View style={styles.pinMarkerBody}>
+                        <MapPin size={30} color="#E11D48" fill="#E11D48" />
+                      </View>
+                    </Animated.View>
+                    <View style={styles.pinShadow} />
+                  </View>
+                )}
+
+                {/* Floating Map Controls */}
+                <View style={styles.mapTopControls} pointerEvents="box-none">
+                  <TouchableOpacity
+                    style={styles.expandMapBtn}
+                    onPress={() => setShowFullMapModal(true)}
+                    activeOpacity={0.85}
                   >
-                    <Marker
-                      coordinate={{
-                        latitude: parseFloat(latitude),
-                        longitude: parseFloat(longitude),
-                      }}
-                      draggable
-                      onDragEnd={(e) => {
-                        const lat = e.nativeEvent.coordinate.latitude;
-                        const lng = e.nativeEvent.coordinate.longitude;
-                        setLatitude(lat.toString());
-                        setLongitude(lng.toString());
-                        
-                        fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`)
-                          .then(res => res.json())
-                          .then(data => {
-                            if (data && data.address) {
-                              setStreet(data.address.road || data.address.suburb || data.address.neighbourhood || street);
-                              setCity(data.address.city || data.address.town || data.address.county || city);
-                              setState(data.address.state || state);
-                              setPostalCode(data.address.postcode || postalCode);
-                            }
-                          }).catch(() => {});
-                      }}
-                    />
-                  </MapView>
+                    <Maximize2 size={14} color="#0F172A" style={{ marginRight: 4 }} />
+                    <Text style={styles.expandMapBtnText}>Full Screen</Text>
+                  </TouchableOpacity>
                 </View>
-              ) : null}
+
+                {/* Quick Floating GPS Recenter FAB on Map */}
+                <TouchableOpacity
+                  style={styles.mapGpsFab}
+                  onPress={handleDetectLocation}
+                  disabled={isLocating}
+                  activeOpacity={0.85}
+                >
+                  {isLocating ? (
+                    <ActivityIndicator size="small" color="#0F172A" />
+                  ) : (
+                    <Locate size={18} color="#0F172A" />
+                  )}
+                </TouchableOpacity>
+
+                {/* Bottom Coordinates & Address Status Bar */}
+                <View style={styles.mapFooterBar}>
+                  <Text style={styles.mapFooterCoords} numberOfLines={1}>
+                    {latitude && longitude
+                      ? `GPS: ${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}`
+                      : 'Move map to pinpoint exact store location'}
+                  </Text>
+                </View>
+              </View>
             </View>
 
             {/* Address fields */}
@@ -933,6 +1160,145 @@ export default function OnboardingScreen() {
           )}
         </View>
       </ScrollView>
+
+      {/* Full-Screen Map Modal for Precision Pinning */}
+      <Modal
+        visible={showFullMapModal}
+        animationType="slide"
+        onRequestClose={() => setShowFullMapModal(false)}
+      >
+        <View style={styles.fullModalContainer}>
+          {/* Header */}
+          <View style={styles.fullModalHeader}>
+            <TouchableOpacity
+              style={styles.fullModalCloseBtn}
+              onPress={() => setShowFullMapModal(false)}
+              activeOpacity={0.7}
+            >
+              <X size={22} color="#0F172A" />
+            </TouchableOpacity>
+            <View style={{ flex: 1, marginHorizontal: 8 }}>
+              <Text style={styles.fullModalTitle}>Set Store Location</Text>
+              <Text style={styles.fullModalSubtitle}>Drag map to position pin at store entrance</Text>
+            </View>
+          </View>
+
+          {/* Search bar inside Modal */}
+          <View style={styles.fullModalSearchWrapper}>
+            <View style={styles.fullModalSearchBar}>
+              <Search size={18} color="#64748B" style={{ marginLeft: 12, marginRight: 8 }} />
+              <TextInput
+                style={styles.fullModalSearchInput}
+                placeholder="Search city, area, or landmark..."
+                placeholderTextColor="#94A3B8"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                onSubmitEditing={handleSearchAddress}
+                returnKeyType="search"
+              />
+              {isSearching ? (
+                <ActivityIndicator size="small" color="#0F172A" style={{ marginRight: 10 }} />
+              ) : (
+                <TouchableOpacity
+                  style={styles.fullModalSearchAction}
+                  onPress={handleSearchAddress}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.fullModalSearchActionText}>Search</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          {/* Full Screen Map */}
+          <View style={styles.fullMapWrapper}>
+            {Platform.OS !== 'web' ? (
+              <MapView
+                ref={fullMapRef}
+                style={StyleSheet.absoluteFillObject}
+                initialRegion={{
+                  latitude: parseFloat(latitude) || 20.5937,
+                  longitude: parseFloat(longitude) || 78.9629,
+                  latitudeDelta: 0.005,
+                  longitudeDelta: 0.005,
+                }}
+                showsUserLocation={true}
+                showsMyLocationButton={false}
+                showsCompass={true}
+                rotateEnabled={true}
+                scrollEnabled={true}
+                zoomEnabled={true}
+                onPanDrag={() => {
+                  if (!isMapPanning) setIsMapPanning(true);
+                }}
+                onRegionChange={() => {
+                  if (!isMapPanning) setIsMapPanning(true);
+                }}
+                onRegionChangeComplete={handleRegionChangeComplete}
+                onPress={handleMapPress}
+              />
+            ) : null}
+
+            {/* Center Pin in Modal */}
+            <View style={styles.centerPinContainerModal} pointerEvents="none">
+              <Animated.View
+                style={[
+                  styles.centerPinWrapper,
+                  { transform: [{ translateY: pinLiftAnim }] },
+                ]}
+              >
+                <View style={styles.pinTooltip}>
+                  <Text style={styles.pinTooltipText}>Store Pin</Text>
+                </View>
+                <View style={styles.pinMarkerBody}>
+                  <MapPin size={34} color="#E11D48" fill="#E11D48" />
+                </View>
+              </Animated.View>
+              <View style={styles.pinShadow} />
+            </View>
+
+            {/* GPS FAB in Modal */}
+            <TouchableOpacity
+              style={styles.fullModalGpsFab}
+              onPress={handleDetectLocation}
+              disabled={isLocating}
+              activeOpacity={0.85}
+            >
+              {isLocating ? (
+                <ActivityIndicator size="small" color="#0F172A" />
+              ) : (
+                <Locate size={22} color="#0F172A" />
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Bottom Confirmation Card */}
+          <View style={styles.fullModalBottomCard}>
+            <View style={styles.bottomInfoRow}>
+              <MapPin size={22} color="#E11D48" style={{ marginTop: 2, marginRight: 10 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.bottomPlaceTitle} numberOfLines={1}>
+                  {street || city ? [street, city].filter(Boolean).join(', ') : 'Selected Location'}
+                </Text>
+                <Text style={styles.bottomPlaceCoords} numberOfLines={1}>
+                  {latitude && longitude
+                    ? `GPS: ${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`
+                    : 'Drag map to place pin at store'}
+                </Text>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.confirmLocationBtn}
+              onPress={handleConfirmModalLocation}
+              activeOpacity={0.85}
+            >
+              <Check size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+              <Text style={styles.confirmLocationBtnText}>Confirm Store Location</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -1084,23 +1450,93 @@ const styles = StyleSheet.create({
   locationContainer: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
     borderRadius: 16,
     padding: 16,
-    gap: 12,
+    marginBottom: 8,
   },
-  detectBtn: {
+  locationHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#3B82F6',
-    height: 44,
-    borderRadius: 10,
+    justifyContent: 'space-between',
   },
-  detectBtnText: {
-    color: '#FFFFFF',
-    fontSize: 13,
+  liveCoordBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    marginTop: 16,
+  },
+  liveCoordDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#059669',
+    marginRight: 5,
+  },
+  liveCoordText: {
+    fontSize: 11,
     fontWeight: '700',
+    color: '#047857',
+  },
+  mapSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 12,
+    height: 48,
+    paddingRight: 6,
+  },
+  mapSearchInput: {
+    flex: 1,
+    fontSize: 13,
+    color: '#0F172A',
+    paddingVertical: 0,
+  },
+  mapSearchActionBtn: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginRight: 6,
+  },
+  mapSearchActionText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  mapGpsActionBtn: {
+    backgroundColor: '#0F172A',
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapGpsActionBtnActive: {
+    backgroundColor: '#E11D48',
+  },
+  mapGuidePill: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  mapGuideText: {
+    fontSize: 12,
+    color: '#1E40AF',
+    lineHeight: 16,
+    fontWeight: '500',
   },
   imagePlaceholderBox: {
     backgroundColor: '#FFFFFF',
@@ -1267,17 +1703,280 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  mapWrapper: {
-    height: 250,
+  mapCard: {
+    height: 280,
     width: '100%',
-    borderRadius: 12,
+    borderRadius: 14,
     overflow: 'hidden',
-    marginTop: 12,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: '#CBD5E1',
+    backgroundColor: '#E2E8F0',
+    position: 'relative',
   },
   map: {
     flex: 1,
+  },
+  centerPinContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  centerPinContainerModal: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  centerPinWrapper: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pinTooltip: {
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginBottom: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  pinTooltipText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  pinMarkerBody: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pinShadow: {
+    width: 14,
+    height: 6,
+    borderRadius: 7,
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    marginTop: -3,
+  },
+  mapTopControls: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+  },
+  expandMapBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  expandMapBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  mapGpsFab: {
+    position: 'absolute',
+    bottom: 38,
+    right: 10,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  mapFooterBar: {
+    height: 28,
+    backgroundColor: 'rgba(15, 23, 42, 0.88)',
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+  },
+  mapFooterCoords: {
+    fontSize: 11,
+    color: '#F8FAFC',
+    fontWeight: '600',
+  },
+  webFallbackBox: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+    backgroundColor: '#F8FAFC',
+  },
+  webFallbackTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginBottom: 4,
+  },
+  webFallbackCoords: {
+    fontSize: 12,
+    color: '#64748B',
+    marginBottom: 12,
+  },
+  webGpsBtn: {
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  webGpsBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  fullModalContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  fullModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 56 : 20,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+  },
+  fullModalCloseBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fullModalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  fullModalSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+  },
+  fullModalSearchWrapper: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  fullModalSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    height: 44,
+    paddingRight: 6,
+  },
+  fullModalSearchInput: {
+    flex: 1,
+    fontSize: 13,
+    color: '#0F172A',
+    paddingVertical: 0,
+  },
+  fullModalSearchAction: {
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 7,
+  },
+  fullModalSearchActionText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  fullMapWrapper: {
+    flex: 1,
+    position: 'relative',
+  },
+  fullModalGpsFab: {
+    position: 'absolute',
+    bottom: 20,
+    right: 16,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  fullModalBottomCard: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  bottomInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 14,
+  },
+  bottomPlaceTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  bottomPlaceCoords: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  confirmLocationBtn: {
+    backgroundColor: '#0F172A',
+    borderRadius: 12,
+    height: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmLocationBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
   },
   termsAgreementCard: {
     flexDirection: 'row',

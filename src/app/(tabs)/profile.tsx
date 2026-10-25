@@ -170,6 +170,9 @@ export default function ProfileScreen() {
       const data = res.data?.merchant || res.data;
       if (data) {
         setFullMerchant(data);
+        if (typeof data.isOnline === 'boolean') {
+          updateMerchantState({ isOnline: data.isOnline });
+        }
         setShopForm({
           shopName: data.shopName || '',
           shopDescription: data.shopDescription || '',
@@ -225,11 +228,12 @@ export default function ProfileScreen() {
     if (!merchant?.id) return;
     setUpdatingStatus(true);
     try {
-      await api.patch(`merchant/${merchant.id}/toggle-online`, {
+      const res = await api.patch(`merchant/${merchant.id}/toggle-online`, {
         isOnline: newVal,
       });
-      updateMerchantState({ isOnline: newVal });
-      Alert.alert('Status Updated', `Your store is now ${newVal ? 'ONLINE' : 'OFFLINE'}.`);
+      const updatedOnline = typeof res.data?.isOnline === 'boolean' ? res.data.isOnline : newVal;
+      updateMerchantState({ isOnline: updatedOnline });
+      Alert.alert('Status Updated', `Your store is now ${updatedOnline ? 'ONLINE' : 'OFFLINE'}.`);
     } catch (error: any) {
       Alert.alert('Error', error.response?.data?.message || 'Failed to update online status.');
     } finally {

@@ -382,12 +382,20 @@ export default function OrdersScreen() {
     socket.on('warehouseOrderUpdate', handleOrderUpdate);
     socket.on('orderCancelled', handleOrderCancelled);
 
+    const handleNotification = (payload: any) => {
+      if (payload?.type === 'new_order_placed' || payload?.type === 'newOrder' || payload?.orderId) {
+        fetchInstantOrders();
+      }
+    };
+    socket.on('notification', handleNotification);
+
     return () => {
       socket.off('newOrder', handleNewOrder);
       socket.off('newWarehouseOrder', handleNewOrder);
       socket.off('orderUpdate', handleOrderUpdate);
       socket.off('warehouseOrderUpdate', handleOrderUpdate);
       socket.off('orderCancelled', handleOrderCancelled);
+      socket.off('notification', handleNotification);
     };
   }, [socket, orderType, packingOrderId]);
 

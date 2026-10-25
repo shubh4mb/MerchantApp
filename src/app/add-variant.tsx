@@ -140,7 +140,7 @@ export default function AddVariantScreen() {
             const result = await ImagePicker.launchCameraAsync({
               allowsEditing: true,
               aspect: [4, 5],
-              quality: 0.8,
+              quality: 0.4,
             });
             if (!result.canceled && result.assets?.[0]?.uri) {
               setSelectedImages([...selectedImages, result.assets[0].uri]);
@@ -153,7 +153,7 @@ export default function AddVariantScreen() {
             const result = await ImagePicker.launchImageLibraryAsync({
               allowsEditing: true,
               aspect: [4, 5],
-              quality: 0.8,
+              quality: 0.4,
             });
             if (!result.canceled && result.assets?.[0]?.uri) {
               setSelectedImages([...selectedImages, result.assets[0].uri]);
