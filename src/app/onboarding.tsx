@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
-import api from '@/utils/api';
+import api, { BACKEND_URL } from '@/utils/api';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import {
@@ -34,7 +34,114 @@ import {
   Search,
   ExternalLink,
 } from 'lucide-react-native';
-import MapView, { Marker, Region } from 'react-native-maps';
+import { WebView } from 'react-native-webview';
+
+const getLeafletHtml = (backendUrl: string) => {
+  const cleanUrl = (backendUrl || 'https://api.theflashfits.com').replace(/\/+$/, '');
+  const tileUrl = `${cleanUrl}/api/map/tiles/{s}/voyager/{z}/{x}/{y}{r}.png`;
+
+  return `
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+      * {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+        box-sizing: border-box;
+      }
+      html, body {
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #F8FAFC;
+        touch-action: none;
+      }
+      #map {
+        height: 100%;
+        width: 100%;
+      }
+      .leaflet-control-attribution {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <script>
+      var map = null;
+      var isProgrammaticMove = false;
+
+      function init(lat, lng) {
+        if (map) return;
+        map = L.map('map', {
+          zoomControl: false,
+          attributionControl: false,
+          dragging: true,
+          tap: false,
+          doubleClickZoom: true,
+          boxZoom: false,
+          keyboard: false,
+          inertia: true,
+          inertiaDeceleration: 3000,
+        }).setView([lat, lng], 16);
+
+        var primaryLayer = L.tileLayer('${tileUrl}', {
+          maxZoom: 19,
+          subdomains: 'abcd',
+        }).addTo(map);
+
+        primaryLayer.on('tileerror', function() {
+          // If backend tile proxy is unreachable, fallback cleanly to standard OpenStreetMap
+          L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+          }).addTo(map);
+        });
+
+        map.on('movestart', function() {
+          if (!isProgrammaticMove) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'dragStart' }));
+          }
+        });
+
+        map.on('moveend', function() {
+          if (isProgrammaticMove) {
+            isProgrammaticMove = false;
+            return;
+          }
+          var c = map.getCenter();
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'centerChanged',
+            lat: c.lat,
+            lng: c.lng
+          }));
+        });
+
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'mapReady' }));
+      }
+
+      function moveTo(lat, lng, zoom) {
+        if (!map) {
+          init(lat, lng);
+          return;
+        }
+        isProgrammaticMove = true;
+        map.setView([lat, lng], zoom || map.getZoom() || 16, { animate: true, duration: 0.6 });
+      }
+
+      window.init = init;
+      window.moveTo = moveTo;
+    </script>
+  </body>
+</html>
+`;
+};
 
 const STEPS = [
   { id: 1, title: 'Shop Details' },
@@ -56,6 +163,7 @@ const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'S
 export default function OnboardingScreen() {
   const router = useRouter();
   const { merchant, logout, updateMerchantState } = useAuth();
+  const leafletHtml = useMemo(() => getLeafletHtml(BACKEND_URL), []);
 
   const isPending = merchant?.status === 'pending_verification';
   const isRejected = merchant?.status === 'rejected';
@@ -90,13 +198,12 @@ export default function OnboardingScreen() {
   const [shipsWithinHours, setShipsWithinHours] = useState('24');
   const [acceptsReturns, setAcceptsReturns] = useState(true);
 
-  // Map Navigation & Drag States
-  const mapRef = useRef<MapView>(null);
-  const fullMapRef = useRef<MapView>(null);
+  // Map Navigation & Drag States (OpenStreetMap Leaflet via WebView)
+  const webviewRef = useRef<WebView>(null);
   const [parentScrollEnabled, setParentScrollEnabled] = useState(true);
   const [isMapPanning, setIsMapPanning] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
-  const [showFullMapModal, setShowFullMapModal] = useState(false);
+  const [isMapExpanded, setIsMapExpanded] = useState(false);
   const pinLiftAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -302,8 +409,7 @@ export default function OnboardingScreen() {
         longitudeDelta: 0.004,
       };
 
-      mapRef.current?.animateToRegion(region, 600);
-      fullMapRef.current?.animateToRegion(region, 600);
+      sendToWebview(lat, lng);
 
       await reverseGeocode(lat, lng);
     } catch (err: any) {
@@ -311,6 +417,41 @@ export default function OnboardingScreen() {
       Alert.alert('GPS Notice', 'Could not detect GPS location. You can search your address or pan the map directly.');
     } finally {
       setIsLocating(false);
+    }
+  };
+
+  const sendToWebview = (lat: number, lng: number) => {
+    webviewRef.current?.injectJavaScript(`window.moveTo(${lat}, ${lng}, 16); true;`);
+  };
+
+  const initWebview = (ref: React.RefObject<WebView | null>) => {
+    const lat = parseFloat(latitude) || 20.5937;
+    const lng = parseFloat(longitude) || 78.9629;
+    ref.current?.injectJavaScript(`window.init(${lat}, ${lng}); true;`);
+  };
+
+  const handleMapMessage = (event: any) => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data.type === 'mapReady') {
+        const lat = parseFloat(latitude) || 20.5937;
+        const lng = parseFloat(longitude) || 78.9629;
+        webviewRef.current?.injectJavaScript(`window.init(${lat}, ${lng}); true;`);
+      } else if (data.type === 'dragStart') {
+        setIsMapPanning(true);
+      } else if (data.type === 'centerChanged') {
+        setIsMapPanning(false);
+        setParentScrollEnabled(true);
+        if (data.lat && data.lng) {
+          const lat = Number(data.lat);
+          const lng = Number(data.lng);
+          setLatitude(lat.toFixed(6));
+          setLongitude(lng.toFixed(6));
+          reverseGeocode(lat, lng);
+        }
+      }
+    } catch (e) {
+      console.warn('Map message error:', e);
     }
   };
 
@@ -334,14 +475,7 @@ export default function OnboardingScreen() {
         setLatitude(lat.toFixed(6));
         setLongitude(lng.toFixed(6));
 
-        const region = {
-          latitude: lat,
-          longitude: lng,
-          latitudeDelta: 0.005,
-          longitudeDelta: 0.005,
-        };
-        mapRef.current?.animateToRegion(region, 600);
-        fullMapRef.current?.animateToRegion(region, 600);
+        sendToWebview(lat, lng);
 
         await reverseGeocode(lat, lng);
       } else {
@@ -351,51 +485,6 @@ export default function OnboardingScreen() {
       console.warn('Search geocoding error:', err);
     } finally {
       setIsSearching(false);
-    }
-  };
-
-  const handleRegionChangeComplete = async (region: Region) => {
-    setIsMapPanning(false);
-    setParentScrollEnabled(true);
-    if (region && region.latitude && region.longitude) {
-      setLatitude(region.latitude.toFixed(6));
-      setLongitude(region.longitude.toFixed(6));
-      await reverseGeocode(region.latitude, region.longitude);
-    }
-  };
-
-  const handleMapPress = (e: any) => {
-    const coord = e?.nativeEvent?.coordinate;
-    if (coord?.latitude && coord?.longitude) {
-      const lat = coord.latitude;
-      const lng = coord.longitude;
-      setLatitude(lat.toFixed(6));
-      setLongitude(lng.toFixed(6));
-      const region = {
-        latitude: lat,
-        longitude: lng,
-        latitudeDelta: 0.004,
-        longitudeDelta: 0.004,
-      };
-      mapRef.current?.animateToRegion(region, 400);
-      fullMapRef.current?.animateToRegion(region, 400);
-      reverseGeocode(lat, lng);
-    }
-  };
-
-  const handleConfirmModalLocation = () => {
-    setShowFullMapModal(false);
-    const lat = parseFloat(latitude);
-    const lng = parseFloat(longitude);
-    if (!isNaN(lat) && !isNaN(lng)) {
-      setTimeout(() => {
-        mapRef.current?.animateToRegion({
-          latitude: lat,
-          longitude: lng,
-          latitudeDelta: 0.004,
-          longitudeDelta: 0.004,
-        }, 400);
-      }, 300);
     }
   };
 
@@ -591,7 +680,9 @@ export default function OnboardingScreen() {
           rejectionReason: '',
           isActive: !!updated?.isActive,
         });
-        router.replace('/pending-verification');
+        setTimeout(() => {
+          router.replace('/pending-verification');
+        }, 100);
       } else {
         throw new Error(response.data?.message || 'Failed to submit verification request.');
       }
@@ -809,36 +900,24 @@ export default function OnboardingScreen() {
 
               {/* Interactive Map View Card */}
               <View
-                style={styles.mapCard}
+                style={[styles.mapCard, isMapExpanded && styles.mapCardExpanded]}
                 onTouchStart={() => setParentScrollEnabled(false)}
                 onTouchEnd={() => setParentScrollEnabled(true)}
                 onTouchCancel={() => setParentScrollEnabled(true)}
               >
                 {Platform.OS !== 'web' ? (
-                  <MapView
-                    ref={mapRef}
+                  <WebView
+                    ref={webviewRef}
+                    originWhitelist={['*']}
+                    source={{ html: leafletHtml }}
                     style={styles.map}
-                    initialRegion={{
-                      latitude: parseFloat(latitude) || 20.5937,
-                      longitude: parseFloat(longitude) || 78.9629,
-                      latitudeDelta: 0.005,
-                      longitudeDelta: 0.005,
-                    }}
-                    showsUserLocation={true}
-                    showsMyLocationButton={false}
-                    showsCompass={true}
-                    rotateEnabled={true}
-                    scrollEnabled={true}
-                    zoomEnabled={true}
-                    onPanDrag={() => {
-                      setParentScrollEnabled(false);
-                      if (!isMapPanning) setIsMapPanning(true);
-                    }}
-                    onRegionChange={() => {
-                      if (!isMapPanning) setIsMapPanning(true);
-                    }}
-                    onRegionChangeComplete={handleRegionChangeComplete}
-                    onPress={handleMapPress}
+                    onLoadEnd={() => initWebview(webviewRef)}
+                    onMessage={handleMapMessage}
+                    javaScriptEnabled={true}
+                    domStorageEnabled={true}
+                    scrollEnabled={false}
+                    bounces={false}
+                    overScrollMode="never"
                   />
                 ) : (
                   <View style={styles.webFallbackBox}>
@@ -876,11 +955,11 @@ export default function OnboardingScreen() {
                 <View style={styles.mapTopControls} pointerEvents="box-none">
                   <TouchableOpacity
                     style={styles.expandMapBtn}
-                    onPress={() => setShowFullMapModal(true)}
+                    onPress={() => setIsMapExpanded(!isMapExpanded)}
                     activeOpacity={0.85}
                   >
                     <Maximize2 size={14} color="#0F172A" style={{ marginRight: 4 }} />
-                    <Text style={styles.expandMapBtnText}>Full Screen</Text>
+                    <Text style={styles.expandMapBtnText}>{isMapExpanded ? 'Collapse' : 'Expand'}</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -1160,145 +1239,6 @@ export default function OnboardingScreen() {
           )}
         </View>
       </ScrollView>
-
-      {/* Full-Screen Map Modal for Precision Pinning */}
-      <Modal
-        visible={showFullMapModal}
-        animationType="slide"
-        onRequestClose={() => setShowFullMapModal(false)}
-      >
-        <View style={styles.fullModalContainer}>
-          {/* Header */}
-          <View style={styles.fullModalHeader}>
-            <TouchableOpacity
-              style={styles.fullModalCloseBtn}
-              onPress={() => setShowFullMapModal(false)}
-              activeOpacity={0.7}
-            >
-              <X size={22} color="#0F172A" />
-            </TouchableOpacity>
-            <View style={{ flex: 1, marginHorizontal: 8 }}>
-              <Text style={styles.fullModalTitle}>Set Store Location</Text>
-              <Text style={styles.fullModalSubtitle}>Drag map to position pin at store entrance</Text>
-            </View>
-          </View>
-
-          {/* Search bar inside Modal */}
-          <View style={styles.fullModalSearchWrapper}>
-            <View style={styles.fullModalSearchBar}>
-              <Search size={18} color="#64748B" style={{ marginLeft: 12, marginRight: 8 }} />
-              <TextInput
-                style={styles.fullModalSearchInput}
-                placeholder="Search city, area, or landmark..."
-                placeholderTextColor="#94A3B8"
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                onSubmitEditing={handleSearchAddress}
-                returnKeyType="search"
-              />
-              {isSearching ? (
-                <ActivityIndicator size="small" color="#0F172A" style={{ marginRight: 10 }} />
-              ) : (
-                <TouchableOpacity
-                  style={styles.fullModalSearchAction}
-                  onPress={handleSearchAddress}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.fullModalSearchActionText}>Search</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-
-          {/* Full Screen Map */}
-          <View style={styles.fullMapWrapper}>
-            {Platform.OS !== 'web' ? (
-              <MapView
-                ref={fullMapRef}
-                style={StyleSheet.absoluteFillObject}
-                initialRegion={{
-                  latitude: parseFloat(latitude) || 20.5937,
-                  longitude: parseFloat(longitude) || 78.9629,
-                  latitudeDelta: 0.005,
-                  longitudeDelta: 0.005,
-                }}
-                showsUserLocation={true}
-                showsMyLocationButton={false}
-                showsCompass={true}
-                rotateEnabled={true}
-                scrollEnabled={true}
-                zoomEnabled={true}
-                onPanDrag={() => {
-                  if (!isMapPanning) setIsMapPanning(true);
-                }}
-                onRegionChange={() => {
-                  if (!isMapPanning) setIsMapPanning(true);
-                }}
-                onRegionChangeComplete={handleRegionChangeComplete}
-                onPress={handleMapPress}
-              />
-            ) : null}
-
-            {/* Center Pin in Modal */}
-            <View style={styles.centerPinContainerModal} pointerEvents="none">
-              <Animated.View
-                style={[
-                  styles.centerPinWrapper,
-                  { transform: [{ translateY: pinLiftAnim }] },
-                ]}
-              >
-                <View style={styles.pinTooltip}>
-                  <Text style={styles.pinTooltipText}>Store Pin</Text>
-                </View>
-                <View style={styles.pinMarkerBody}>
-                  <MapPin size={34} color="#E11D48" fill="#E11D48" />
-                </View>
-              </Animated.View>
-              <View style={styles.pinShadow} />
-            </View>
-
-            {/* GPS FAB in Modal */}
-            <TouchableOpacity
-              style={styles.fullModalGpsFab}
-              onPress={handleDetectLocation}
-              disabled={isLocating}
-              activeOpacity={0.85}
-            >
-              {isLocating ? (
-                <ActivityIndicator size="small" color="#0F172A" />
-              ) : (
-                <Locate size={22} color="#0F172A" />
-              )}
-            </TouchableOpacity>
-          </View>
-
-          {/* Bottom Confirmation Card */}
-          <View style={styles.fullModalBottomCard}>
-            <View style={styles.bottomInfoRow}>
-              <MapPin size={22} color="#E11D48" style={{ marginTop: 2, marginRight: 10 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.bottomPlaceTitle} numberOfLines={1}>
-                  {street || city ? [street, city].filter(Boolean).join(', ') : 'Selected Location'}
-                </Text>
-                <Text style={styles.bottomPlaceCoords} numberOfLines={1}>
-                  {latitude && longitude
-                    ? `GPS: ${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`
-                    : 'Drag map to place pin at store'}
-                </Text>
-              </View>
-            </View>
-
-            <TouchableOpacity
-              style={styles.confirmLocationBtn}
-              onPress={handleConfirmModalLocation}
-              activeOpacity={0.85}
-            >
-              <Check size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
-              <Text style={styles.confirmLocationBtnText}>Confirm Store Location</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -1712,6 +1652,9 @@ const styles = StyleSheet.create({
     borderColor: '#CBD5E1',
     backgroundColor: '#E2E8F0',
     position: 'relative',
+  },
+  mapCardExpanded: {
+    height: 480,
   },
   map: {
     flex: 1,

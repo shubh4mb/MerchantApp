@@ -10,7 +10,7 @@ const STANDARD_SIZES = new Set([
   '6', '7', '8', '9', '10', '11', '12'
 ]);
 
-function cleanCodeString(
+export function cleanCodeString(
   code: string,
   sizes?: Array<{ size?: string; merchantSizeCode?: string }>
 ): string {
@@ -89,4 +89,33 @@ export function getMerchantEnteredSku(
   if (!raw) return '—';
 
   return cleanCodeString(raw, sizes) || raw;
+}
+
+/**
+ * Checks whether a given size code is a genuine, merchant-entered custom SKU,
+ * as opposed to an empty string, an auto-generated SKU (e.g. SKU-*, PRD-*, WH-*),
+ * or an auto-derived code like `${baseSku}-${size}` or just `${baseSku}`.
+ */
+export function isDistinctCustomSizeSku(
+  code?: string | null,
+  productBaseSku?: string | null,
+  sizeName?: string | null
+): boolean {
+  if (!code || typeof code !== 'string') return false;
+  const trimmed = code.trim();
+  if (!trimmed || trimmed === '—') return false;
+  const upper = trimmed.toUpperCase();
+  if (upper.startsWith('SKU-') || upper.startsWith('PRD-') || upper.startsWith('WH-')) return false;
+
+  if (productBaseSku && typeof productBaseSku === 'string') {
+    const base = productBaseSku.trim().toUpperCase();
+    if (base) {
+      if (upper === base) return false;
+      if (sizeName) {
+        const sz = sizeName.trim().toUpperCase();
+        if (upper === `${base}-${sz}` || upper === `${base}${sz}`) return false;
+      }
+    }
+  }
+  return true;
 }

@@ -246,7 +246,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             vibrate: [0, 500, 200, 500],
             channelId: 'order_alerts',
             data: { orderId: String(orderId) },
-          },
+          } as any,
           trigger: null,
         });
       } catch (err) {

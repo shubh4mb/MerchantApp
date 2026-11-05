@@ -14,13 +14,14 @@ import {
   ScrollView,
   useWindowDimensions,
   Platform,
+  Switch,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import api, { BACKEND_URL, resolveImageUrl, updateSingleSizeStock } from '../../utils/api';
 import * as ImagePicker from 'expo-image-picker';
 import { Camera, Image as ImageIcon, Plus, Minus, Trash2, Edit3, Settings, Save, ChevronDown, ChevronUp, Barcode, Package, Layers, Search, X, Filter, ArrowUpDown, Check, ChevronLeft, ChevronRight, Eye } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
-import { getMerchantEnteredSku } from '../../utils/skuUtils';
+import { getMerchantEnteredSku, cleanCodeString, isDistinctCustomSizeSku } from '../../utils/skuUtils';
 
 interface SizeStock {
   _id: string;
@@ -386,6 +387,7 @@ export default function ProductsScreen() {
 
   // States for Stock Modal
   const [stockModalVisible, setStockModalVisible] = useState(false);
+  const [stockModalCustomSku, setStockModalCustomSku] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null);
   const [sizeList, setSizeList] = useState<{ size: string; stock: string; sizeCode?: string }[]>([]);
@@ -795,17 +797,34 @@ export default function ProductsScreen() {
 
     if (sourceSizes.length === 0) {
       // Provide a clean default row ready to enter
+      setStockModalCustomSku(false);
       setSizeList([{ size: 'Free Size', stock: '0', sizeCode: '' }]);
     } else {
+      const validCodes = sourceSizes.map((s) => {
+        const code = (s.merchantSizeCode || s.sizeCode || '').trim();
+        const isSystem = code.startsWith('SKU-') || code.startsWith('PRD-') || code.startsWith('WH-');
+        return isSystem ? '' : code;
+      });
+      const baseCodes = new Set(
+        validCodes.filter(Boolean).map((code) => cleanCodeString(code, sourceSizes))
+      );
+      const isAutoDerived = baseCodes.size <= 1 && sourceSizes.every((s) => {
+        const code = (s.merchantSizeCode || s.sizeCode || '').trim();
+        if (!code) return true;
+        const base = [...baseCodes][0] || '';
+        return code === base || code === `${base}-${s.size}` || code === `${base}-${(s.size || '').toUpperCase()}`;
+      });
+      const hasGenuineCustomSku = validCodes.some((c) => c !== '') && !isAutoDerived;
+      setStockModalCustomSku(hasGenuineCustomSku);
+
       setSizeList(
         sourceSizes.map((s) => {
-          const rawCode = s.merchantSizeCode || s.sizeCode || (s as any).productCode || '';
-          const cleaned = getMerchantEnteredSku(rawCode, s.merchantSizeCode, [s]);
+          const rawCode = (s.merchantSizeCode || s.sizeCode || '').trim();
           const stockVal = s.stock !== undefined && s.stock !== null ? String(s.stock) : '0';
           return {
             size: s.size || '',
             stock: stockVal,
-            sizeCode: cleaned !== '—' ? cleaned : (s.sizeCode || ''),
+            sizeCode: hasGenuineCustomSku ? rawCode : '',
           };
         })
       );
@@ -819,7 +838,7 @@ export default function ProductsScreen() {
     try {
       const formattedSizes = sizeList.map((s) => ({
         size: s.size.trim(),
-        merchantSizeCode: s.sizeCode?.trim() || undefined,
+        merchantSizeCode: (stockModalCustomSku && s.sizeCode?.trim()) ? s.sizeCode.trim() : undefined,
         stock: parseInt(s.stock, 10) || 0,
       }));
 
@@ -1806,7 +1825,7 @@ export default function ProductsScreen() {
                                           {sz.size}
                                         </Text>
                                       </View>
-                                      {sz.merchantSizeCode || sz.sizeCode ? (
+                                      {isDistinctCustomSizeSku(sz.merchantSizeCode || sz.sizeCode, getMerchantEnteredSku(activeDetailProduct?.productCode || activeDetailProduct?.productSku, (activeDetailProduct as any)?.merchantSizeCode), sz.size) ? (
                                         <Text style={styles.sizeCodeLabel} numberOfLines={1}>
                                           ({sz.merchantSizeCode || sz.sizeCode})
                                         </Text>
@@ -1872,7 +1891,7 @@ export default function ProductsScreen() {
                                     <View style={styles.sizeNameBadge}>
                                       <Text style={styles.sizeNameBadgeText}>{sz.size}</Text>
                                     </View>
-                                    {sz.merchantSizeCode || sz.sizeCode ? (
+                                    {isDistinctCustomSizeSku(sz.merchantSizeCode || sz.sizeCode, getMerchantEnteredSku(activeDetailProduct?.productCode || activeDetailProduct?.productSku, (activeDetailProduct as any)?.merchantSizeCode), sz.size) ? (
                                       <Text style={styles.sizeCodeLabel} numberOfLines={1}>
                                         ({sz.merchantSizeCode || sz.sizeCode})
                                       </Text>
@@ -2143,10 +2162,24 @@ export default function ProductsScreen() {
               </Text>
             )}
 
+            {/* Toggle for Custom Size SKU */}
+            <View style={styles.skuToggleRow}>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={styles.skuToggleTitle}>Different SKU for each size</Text>
+                <Text style={styles.skuToggleSubtitle}>Enable only if you assign distinct barcodes / SKUs per size</Text>
+              </View>
+              <Switch
+                value={stockModalCustomSku}
+                onValueChange={setStockModalCustomSku}
+                thumbColor={stockModalCustomSku ? '#1E293B' : '#E2E8F0'}
+                trackColor={{ true: '#1E293B50', false: '#CBD5E1' }}
+              />
+            </View>
+
             <ScrollView style={styles.modalForm} keyboardShouldPersistTaps="handled">
               {sizeList.map((row, index) => (
                 <View key={index} style={styles.modalFormRow}>
-                  <View style={{ flex: 1.1 }}>
+                  <View style={{ flex: stockModalCustomSku ? 1.1 : 1.5 }}>
                     <Text style={styles.inputLabel}>Size *</Text>
                     <TextInput
                       style={styles.modalInput}
@@ -2161,22 +2194,24 @@ export default function ProductsScreen() {
                     />
                   </View>
 
-                  <View style={{ flex: 1.3 }}>
-                    <Text style={styles.inputLabel}>Code / SKU</Text>
-                    <TextInput
-                      style={styles.modalInput}
-                      value={row.sizeCode || ''}
-                      placeholder="e.g. S-01"
-                      placeholderTextColor="#94A3B8"
-                      onChangeText={(val) => {
-                        const updated = [...sizeList];
-                        updated[index].sizeCode = val;
-                        setSizeList(updated);
-                      }}
-                    />
-                  </View>
+                  {stockModalCustomSku ? (
+                    <View style={{ flex: 1.3, marginLeft: 8 }}>
+                      <Text style={styles.inputLabel}>Code / SKU</Text>
+                      <TextInput
+                        style={styles.modalInput}
+                        value={row.sizeCode || ''}
+                        placeholder="e.g. S-01"
+                        placeholderTextColor="#94A3B8"
+                        onChangeText={(val) => {
+                          const updated = [...sizeList];
+                          updated[index].sizeCode = val;
+                          setSizeList(updated);
+                        }}
+                      />
+                    </View>
+                  ) : null}
 
-                  <View style={{ flex: 2.1 }}>
+                  <View style={{ flex: stockModalCustomSku ? 2.1 : 2.5, marginLeft: stockModalCustomSku ? 0 : 8 }}>
                     <Text style={styles.inputLabel}>Stock</Text>
                     <View style={styles.modalStockCounterRow}>
                       <TouchableOpacity
@@ -4128,5 +4163,27 @@ const styles = StyleSheet.create({
   variantThumbCardImg: {
     width: '100%',
     height: '100%',
+  },
+  skuToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 12,
+  },
+  skuToggleTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  skuToggleSubtitle: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
   },
 });

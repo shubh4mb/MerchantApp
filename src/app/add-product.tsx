@@ -88,10 +88,13 @@ export default function AddProductScreen() {
   const [discount, setDiscount] = useState('0');
 
   // Sizes & Stock
+  const [hasCustomSizeSku, setHasCustomSizeSku] = useState(false);
   const [sizes, setSizes] = useState<SizeStockRow[]>([
-    { size: 'S', sizeCode: '', stock: '10' },
-    { size: 'M', sizeCode: '', stock: '10' },
-    { size: 'L', sizeCode: '', stock: '10' },
+    { size: 'FS', sizeCode: '', stock: '0' },
+    { size: 'S', sizeCode: '', stock: '0' },
+    { size: 'M', sizeCode: '', stock: '0' },
+    { size: 'L', sizeCode: '', stock: '0' },
+    { size: 'XL', sizeCode: '', stock: '0' },
   ]);
 
   // Variant Photos
@@ -432,11 +435,15 @@ export default function AddProductScreen() {
 
     const formattedSizes = sizes
       .filter((s) => s.size.trim() !== '')
-      .map((s) => ({
-        size: s.size.trim(),
-        sizeCode: s.sizeCode.trim() || `${(productSku.trim() || 'SKU')}-${s.size.trim()}`,
-        stock: parseInt(s.stock) || 0,
-      }));
+      .map((s) => {
+        const customSku = hasCustomSizeSku && s.sizeCode.trim() ? s.sizeCode.trim() : '';
+        return {
+          size: s.size.trim(),
+          sizeCode: customSku,
+          merchantSizeCode: customSku || undefined,
+          stock: parseInt(s.stock) || 0,
+        };
+      });
 
     if (formattedSizes.length === 0) return setError('Please add at least one valid size with stock.');
     if (selectedImages.length === 0) return setError('Please upload at least one product photo.');
@@ -868,51 +875,99 @@ export default function AddProductScreen() {
               <Layers size={20} color="#1E293B" style={{ marginRight: 8 }} />
               <Text style={styles.sectionTitle}>Category Specifications (Optional)</Text>
             </View>
-            {dynamicAttributes.map((attr) => (
-              <View key={attr._id} style={{ marginBottom: 12 }}>
-                <Text style={styles.label}>{attr.name} <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '400' }}>(Optional)</Text></Text>
-                {attr.values && attr.values.length > 0 ? (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipRow}>
-                    {attr.values.map((v) => {
-                      const isSel = attributeValues[attr._id] === v.value;
-                      return (
-                        <TouchableOpacity
-                          key={v.value}
-                          style={[styles.chip, isSel && styles.chipSelected]}
-                          onPress={() => setAttributeValues((prev) => {
-                            const updated = { ...prev };
-                            if (updated[attr._id] === v.value) {
-                              delete updated[attr._id];
-                            } else {
-                              updated[attr._id] = v.value;
-                            }
-                            return updated;
-                          })}
-                        >
-                          <Text style={[styles.chipText, isSel && styles.chipTextSelected]}>{v.label}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                ) : (
-                  <TextInput
-                    style={styles.input}
-                    placeholder={`Enter ${attr.name} (Optional)`}
-                    placeholderTextColor="#94A3B8"
-                    value={attributeValues[attr._id] || ''}
-                    onChangeText={(val) => setAttributeValues((prev) => {
-                      const updated = { ...prev };
-                      if (val === '') {
-                        delete updated[attr._id];
-                      } else {
-                        updated[attr._id] = val;
-                      }
-                      return updated;
-                    })}
-                  />
-                )}
-              </View>
-            ))}
+            {dynamicAttributes.map((attr) => {
+              const isMultiselect = attr.inputType === 'multiselect';
+              const currentVal = attributeValues[attr._id];
+
+              if (attr.inputType === 'boolean') {
+                return (
+                  <View key={attr._id} style={styles.toggleRowCompact}>
+                    <Text style={styles.toggleRowText}>{attr.name} Enabled?</Text>
+                    <Switch
+                      value={!!currentVal}
+                      onValueChange={(val) => setAttributeValues((prev) => {
+                        const updated = { ...prev };
+                        if (val) updated[attr._id] = true;
+                        else delete updated[attr._id];
+                        return updated;
+                      })}
+                      disabled={submitting}
+                      thumbColor={currentVal ? '#1E293B' : '#E2E8F0'}
+                      trackColor={{ true: '#1E293B50', false: '#CBD5E1' }}
+                    />
+                  </View>
+                );
+              }
+
+              return (
+                <View key={attr._id} style={{ marginBottom: 12 }}>
+                  <Text style={styles.label}>
+                    {attr.name} {isMultiselect && <Text style={{ fontSize: 11, color: '#6366F1' }}>(Multi-select)</Text>} <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '400' }}>(Optional)</Text>
+                  </Text>
+                  {attr.values && attr.values.length > 0 ? (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipRow}>
+                      {attr.values.map((v) => {
+                        const isSel = isMultiselect
+                          ? Array.isArray(currentVal) && currentVal.map(String).includes(String(v.value))
+                          : String(currentVal) === String(v.value);
+
+                        return (
+                          <TouchableOpacity
+                            key={v.value}
+                            style={[styles.chip, isSel && styles.chipSelected, { flexDirection: 'row', alignItems: 'center' }]}
+                            onPress={() => setAttributeValues((prev) => {
+                              const updated = { ...prev };
+                              if (isMultiselect) {
+                                let arr = Array.isArray(updated[attr._id])
+                                  ? [...updated[attr._id]]
+                                  : (updated[attr._id] ? [updated[attr._id]] : []);
+                                if (arr.map(String).includes(String(v.value))) {
+                                  arr = arr.filter((x) => String(x) !== String(v.value));
+                                } else {
+                                  arr.push(v.value);
+                                }
+                                if (arr.length > 0) {
+                                  updated[attr._id] = arr;
+                                } else {
+                                  delete updated[attr._id];
+                                }
+                              } else {
+                                if (String(updated[attr._id]) === String(v.value)) {
+                                  delete updated[attr._id];
+                                } else {
+                                  updated[attr._id] = v.value;
+                                }
+                              }
+                              return updated;
+                            })}
+                          >
+                            {isSel && <Check size={12} color="#FFFFFF" style={{ marginRight: 4 }} />}
+                            <Text style={[styles.chipText, isSel && styles.chipTextSelected]}>{v.label}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  ) : (
+                    <TextInput
+                      style={styles.input}
+                      placeholder={`Enter ${attr.name} (Optional)`}
+                      placeholderTextColor="#94A3B8"
+                      keyboardType={attr.inputType === 'number' ? 'numeric' : 'default'}
+                      value={currentVal !== undefined && currentVal !== null ? String(currentVal) : ''}
+                      onChangeText={(val) => setAttributeValues((prev) => {
+                        const updated = { ...prev };
+                        if (val === '') {
+                          delete updated[attr._id];
+                        } else {
+                          updated[attr._id] = attr.inputType === 'number' ? Number(val) || '' : val;
+                        }
+                        return updated;
+                      })}
+                    />
+                  )}
+                </View>
+              );
+            })}
           </View>
         ) : null}
 
@@ -1039,9 +1094,24 @@ export default function AddProductScreen() {
           </View>
 
           <View style={styles.stockCard}>
+            {/* Toggle for Custom Size SKU */}
+            <View style={styles.skuToggleRow}>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={styles.skuToggleTitle}>Different SKU for each size</Text>
+                <Text style={styles.skuToggleSubtitle}>Enable only if you assign distinct barcodes / SKUs per size</Text>
+              </View>
+              <Switch
+                value={hasCustomSizeSku}
+                onValueChange={setHasCustomSizeSku}
+                disabled={submitting}
+                thumbColor={hasCustomSizeSku ? '#1E293B' : '#E2E8F0'}
+                trackColor={{ true: '#1E293B50', false: '#CBD5E1' }}
+              />
+            </View>
+
             {sizes.map((row, index) => (
               <View key={index} style={styles.stockRow}>
-                <View style={{ flex: 1.2 }}>
+                <View style={{ flex: hasCustomSizeSku ? 1.2 : 1.5 }}>
                   <Text style={styles.subLabel}>Size *</Text>
                   <TextInput
                     style={styles.smallInput}
@@ -1056,22 +1126,24 @@ export default function AddProductScreen() {
                   />
                 </View>
 
-                <View style={{ flex: 2, marginLeft: 8 }}>
-                  <Text style={styles.subLabel}>Size Code (SKU)</Text>
-                  <TextInput
-                    style={styles.smallInput}
-                    placeholder="e.g. S-01"
-                    placeholderTextColor="#94A3B8"
-                    value={row.sizeCode}
-                    onChangeText={(val) => {
-                      const updated = [...sizes];
-                      updated[index].sizeCode = val;
-                      setSizes(updated);
-                    }}
-                  />
-                </View>
+                {hasCustomSizeSku ? (
+                  <View style={{ flex: 2, marginLeft: 8 }}>
+                    <Text style={styles.subLabel}>Size Code (SKU)</Text>
+                    <TextInput
+                      style={styles.smallInput}
+                      placeholder="e.g. S-01"
+                      placeholderTextColor="#94A3B8"
+                      value={row.sizeCode}
+                      onChangeText={(val) => {
+                        const updated = [...sizes];
+                        updated[index].sizeCode = val;
+                        setSizes(updated);
+                      }}
+                    />
+                  </View>
+                ) : null}
 
-                <View style={{ flex: 1.2, marginLeft: 8 }}>
+                <View style={{ flex: hasCustomSizeSku ? 1.2 : 1.5, marginLeft: 8 }}>
                   <Text style={styles.subLabel}>Stock</Text>
                   <TextInput
                     style={styles.smallInput}
@@ -1371,6 +1443,45 @@ const styles = StyleSheet.create({
     padding: 10,
     borderWidth: 1,
     borderColor: '#E2E8F0',
+  },
+  skuToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 12,
+  },
+  skuToggleTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  skuToggleSubtitle: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  toggleRowCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 12,
+  },
+  toggleRowText: {
+    fontSize: 14,
+    color: '#1E293B',
+    fontWeight: '600',
   },
   stockRow: {
     flexDirection: 'row',

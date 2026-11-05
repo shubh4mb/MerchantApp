@@ -18,7 +18,7 @@ import * as ImagePicker from 'expo-image-picker';
 import api from '../utils/api';
 import { Check, Package, Tag, Layers, DollarSign, Activity, Settings, X, Plus, Camera, Trash2, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Link as LinkIcon, Download } from 'lucide-react-native';
 import { downloadAndSaveImage, downloadAndSaveMultipleImages } from '../utils/imageDownloader';
-import { getMerchantEnteredSku } from '../utils/skuUtils';
+import { getMerchantEnteredSku, cleanCodeString } from '../utils/skuUtils';
 
 interface Category {
   _id: string;
@@ -88,6 +88,7 @@ export default function EditProductScreen() {
   const [discount, setDiscount] = useState('0');
   
   // Sizes array & Images
+  const [hasCustomSizeSku, setHasCustomSizeSku] = useState(false);
   const [sizes, setSizes] = useState<{ _id?: string; size: string; merchantSizeCode: string; stock: string }[]>([]);
   const [selectedImages, setSelectedImages] = useState<{ uri: string; isNew: boolean; _id?: string }[]>([]);
 
@@ -153,23 +154,48 @@ export default function EditProductScreen() {
         
         // Populate sizes array
         if (prod.sizes && prod.sizes.length > 0) {
+            // Check if sizes have genuine custom SKUs entered by the merchant
+            // Filter out system-generated codes (SKU-*, PRD-*, WH-*) and empty strings
+            const validCodes = prod.sizes.map((s: any) => {
+                const raw = (s.merchantSizeCode && typeof s.merchantSizeCode === 'string') ? s.merchantSizeCode.trim() : '';
+                const isSystem = raw.startsWith('SKU-') || raw.startsWith('PRD-') || raw.startsWith('WH-');
+                return isSystem ? '' : raw;
+            });
+
+            // Check if all non-empty codes are just `${base}-${size}` derived from a single base SKU
+            const baseCodes = new Set(
+                validCodes
+                    .filter(Boolean)
+                    .map((code: string) => cleanCodeString(code, prod.sizes))
+            );
+            const isAutoDerivedFromSingleSku = baseCodes.size <= 1 && prod.sizes.every((s: any) => {
+                const raw = (s.merchantSizeCode && typeof s.merchantSizeCode === 'string') ? s.merchantSizeCode.trim() : '';
+                if (!raw) return true;
+                const base = [...baseCodes][0] || '';
+                return raw === base || raw === `${base}-${s.size}` || raw === `${base}-${(s.size || '').toUpperCase()}`;
+            });
+
+            const hasGenuineCustomSku = validCodes.some((c: string) => c !== '') && !isAutoDerivedFromSingleSku;
+
             setSizes(prod.sizes.map((s: any) => {
-                const rawCode = s.merchantSizeCode || s.productCode || '';
-                const clean = getMerchantEnteredSku(rawCode, s.merchantSizeCode, [s]);
+                const rawCode = (s.merchantSizeCode && typeof s.merchantSizeCode === 'string') ? s.merchantSizeCode.trim() : '';
                 return {
                     _id: s._id,
                     size: s.size || '',
-                    merchantSizeCode: clean !== '—' ? clean : (s.merchantSizeCode || ''),
-                    stock: String(s.stock || 0)
+                    merchantSizeCode: hasGenuineCustomSku ? rawCode : '',
+                    stock: String(s.stock ?? 0)
                 };
             }));
+            setHasCustomSizeSku(hasGenuineCustomSku);
         } else {
-            const rawCode = prod.merchantSizeCode || prod.productCode || '';
-            const clean = getMerchantEnteredSku(rawCode, prod.merchantSizeCode);
+            const rawCode = (prod.merchantSizeCode && typeof prod.merchantSizeCode === 'string') ? prod.merchantSizeCode.trim() : '';
+            const isSystem = rawCode.startsWith('SKU-') || rawCode.startsWith('PRD-') || rawCode.startsWith('WH-');
+            const hasGenuineCustomSku = !isSystem && rawCode !== '';
+            setHasCustomSizeSku(hasGenuineCustomSku);
             setSizes([{
                 size: prod.size || '',
-                merchantSizeCode: clean !== '—' ? clean : (prod.merchantSizeCode || ''),
-                stock: String(prod.stock || 0)
+                merchantSizeCode: hasGenuineCustomSku ? rawCode : '',
+                stock: String(prod.stock ?? 0)
             }]);
         }
 
@@ -422,7 +448,7 @@ export default function EditProductScreen() {
   const handleDeleteProduct = () => {
     Alert.alert(
       'Delete Product',
-      `Are you sure you want to delete "${name || 'this product'}" and all its variations? This action cannot be undone.`,
+      `Are you sure you want to delete "${name || 'this product'}"? This product will be deactivated and archived from your live store.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -432,7 +458,7 @@ export default function EditProductScreen() {
             try {
               setSaving(true);
               await api.delete(`/merchant/deleteProduct/${id}`);
-              Alert.alert('Success', 'Product deleted successfully.', [
+              Alert.alert('Archived', 'Product has been archived successfully.', [
                 { text: 'OK', onPress: () => router.replace('/(tabs)/products') }
               ]);
             } catch (err: any) {
@@ -549,7 +575,7 @@ export default function EditProductScreen() {
     .map((s) => ({
         _id: s._id,
         size: s.size.trim(),
-        merchantSizeCode: s.merchantSizeCode.trim(),
+        merchantSizeCode: hasCustomSizeSku ? s.merchantSizeCode.trim() : '',
         stock: parseInt(s.stock) || 0,
     }));
 
@@ -1124,9 +1150,24 @@ export default function EditProductScreen() {
             {/* Sizes & Stock */}
             <Text style={styles.label}>Sizes & Inventory *</Text>
             <View style={styles.stockCard}>
+                {/* Toggle for Custom Size SKU */}
+                <View style={styles.skuToggleRow}>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={styles.skuToggleTitle}>Different SKU for each size</Text>
+                    <Text style={styles.skuToggleSubtitle}>Enable only if you assign distinct barcodes / SKUs per size</Text>
+                  </View>
+                  <Switch
+                    value={hasCustomSizeSku}
+                    onValueChange={setHasCustomSizeSku}
+                    disabled={saving}
+                    thumbColor={hasCustomSizeSku ? '#1E293B' : '#E2E8F0'}
+                    trackColor={{ true: '#1E293B50', false: '#CBD5E1' }}
+                  />
+                </View>
+
                 {sizes.map((row, index) => (
                 <View key={index} style={styles.stockRow}>
-                    <View style={{ flex: 1.2 }}>
+                    <View style={{ flex: hasCustomSizeSku ? 1.2 : 1.5 }}>
                     <Text style={styles.subLabel}>Size *</Text>
                     <TextInput
                         style={styles.smallInput}
@@ -1141,22 +1182,24 @@ export default function EditProductScreen() {
                     />
                     </View>
 
-                    <View style={{ flex: 2, marginLeft: 8 }}>
-                    <Text style={styles.subLabel}>Stock Code (SKU)</Text>
-                    <TextInput
-                        style={styles.smallInput}
-                        placeholder="e.g. S-01"
-                        placeholderTextColor="#94A3B8"
-                        value={row.merchantSizeCode}
-                        onChangeText={(val) => {
-                            const updated = [...sizes];
-                            updated[index].merchantSizeCode = val;
-                            setSizes(updated);
-                        }}
-                    />
-                    </View>
+                    {hasCustomSizeSku ? (
+                      <View style={{ flex: 2, marginLeft: 8 }}>
+                      <Text style={styles.subLabel}>Stock Code (SKU)</Text>
+                      <TextInput
+                          style={styles.smallInput}
+                          placeholder="e.g. S-01"
+                          placeholderTextColor="#94A3B8"
+                          value={row.merchantSizeCode}
+                          onChangeText={(val) => {
+                              const updated = [...sizes];
+                              updated[index].merchantSizeCode = val;
+                              setSizes(updated);
+                          }}
+                      />
+                      </View>
+                    ) : null}
 
-                    <View style={{ flex: 1.2, marginLeft: 8 }}>
+                    <View style={{ flex: hasCustomSizeSku ? 1.2 : 1.5, marginLeft: 8 }}>
                     <Text style={styles.subLabel}>Stock</Text>
                     <TextInput
                         style={styles.smallInput}
@@ -1416,6 +1459,16 @@ export default function EditProductScreen() {
             <Text style={styles.submitBtnText}>Save Product Details</Text>
             )}
         </TouchableOpacity>
+
+        {/* Delete Product Button */}
+        <TouchableOpacity
+            style={styles.deleteProductBtn}
+            onPress={handleDeleteProduct}
+            disabled={saving}
+        >
+            <Trash2 size={16} color="#EF4444" style={{ marginRight: 8 }} />
+            <Text style={styles.deleteProductBtnText}>Delete / Archive Product</Text>
+        </TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -1658,6 +1711,44 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.5,
   },
+  deleteProductBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 12,
+    paddingVertical: 14,
+    marginTop: 12,
+  },
+  deleteProductBtnText: {
+    color: '#DC2626',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  skuToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 12,
+  },
+  skuToggleTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  skuToggleSubtitle: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
   mediaContainer: {
     marginTop: 8,
   },
@@ -1674,22 +1765,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     resizeMode: 'cover',
-  },
-  deleteProductBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FEF2F2',
-    borderWidth: 1,
-    borderColor: '#FCA5A5',
-    borderRadius: 8,
-    paddingVertical: 14,
-    marginTop: 12,
-  },
-  deleteProductBtnText: {
-    color: '#DC2626',
-    fontSize: 15,
-    fontWeight: '700',
   },
   coverBadge: {
     position: 'absolute',

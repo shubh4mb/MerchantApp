@@ -55,7 +55,14 @@ export default function AddVariantScreen() {
   const [discount, setDiscount] = useState('0');
 
   // Stock states
-  const [sizes, setSizes] = useState<SizeStock[]>([{ size: 'M', sizeCode: '', stock: '10' }]);
+  const [hasCustomSizeSku, setHasCustomSizeSku] = useState(false);
+  const [sizes, setSizes] = useState<SizeStock[]>([
+    { size: 'FS', sizeCode: '', stock: '0' },
+    { size: 'S', sizeCode: '', stock: '0' },
+    { size: 'M', sizeCode: '', stock: '0' },
+    { size: 'L', sizeCode: '', stock: '0' },
+    { size: 'XL', sizeCode: '', stock: '0' },
+  ]);
 
   // Media state
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
@@ -85,15 +92,11 @@ export default function AddVariantScreen() {
 
         if (prod.sizes && prod.sizes.length > 0) {
           setSizes(
-            prod.sizes.map((s: any) => {
-              const raw = s.merchantSizeCode || s.sizeCode || '';
-              const clean = getMerchantEnteredSku(raw, s.merchantSizeCode, [s]);
-              return {
-                size: s.size || 'M',
-                sizeCode: clean !== '—' ? clean : raw,
-                stock: String(s.stock ?? 10),
-              };
-            })
+            prod.sizes.map((s: any) => ({
+              size: s.size || '',
+              sizeCode: '',
+              stock: '0',
+            }))
           );
         }
       } catch (err) {
@@ -204,7 +207,7 @@ export default function AddVariantScreen() {
         .filter((s) => s.size.trim() !== '')
         .map((s) => ({
           size: s.size.trim(),
-          merchantSizeCode: s.sizeCode.trim() || undefined,
+          merchantSizeCode: (hasCustomSizeSku && s.sizeCode.trim()) ? s.sizeCode.trim() : undefined,
           stock: parseInt(s.stock) || 0
         }));
       formData.append('sizes', JSON.stringify(formattedSizes));
@@ -420,9 +423,23 @@ export default function AddVariantScreen() {
           {/* Sizes & Stock */}
           <Text style={styles.label}>Sizes & Stock Inventory</Text>
           <View style={styles.stockCard}>
+            {/* Toggle for Custom Size SKU */}
+            <View style={styles.skuToggleRow}>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={styles.skuToggleTitle}>Different SKU for each size</Text>
+                <Text style={styles.skuToggleSubtitle}>Enable only if you assign distinct barcodes / SKUs per size</Text>
+              </View>
+              <Switch
+                value={hasCustomSizeSku}
+                onValueChange={setHasCustomSizeSku}
+                thumbColor={hasCustomSizeSku ? '#1E293B' : '#E2E8F0'}
+                trackColor={{ true: '#1E293B50', false: '#CBD5E1' }}
+              />
+            </View>
+
             {sizes.map((row, index) => (
               <View key={index} style={styles.stockRow}>
-                <View style={{ flex: 1.5 }}>
+                <View style={{ flex: hasCustomSizeSku ? 1.2 : 1.5 }}>
                   <Text style={styles.subLabel}>Size *</Text>
                   <TextInput
                     style={styles.smallInput}
@@ -436,21 +453,23 @@ export default function AddVariantScreen() {
                     }}
                   />
                 </View>
-                <View style={{ flex: 2, marginLeft: 8 }}>
-                  <Text style={styles.subLabel}>Size Code (SKU)</Text>
-                  <TextInput
-                    style={styles.smallInput}
-                    placeholder="e.g. M-01"
-                    placeholderTextColor="#94A3B8"
-                    value={row.sizeCode}
-                    onChangeText={(val) => {
-                      const updated = [...sizes];
-                      updated[index].sizeCode = val;
-                      setSizes(updated);
-                    }}
-                  />
-                </View>
-                <View style={{ flex: 2.4, marginLeft: 8 }}>
+                {hasCustomSizeSku ? (
+                  <View style={{ flex: 2, marginLeft: 8 }}>
+                    <Text style={styles.subLabel}>Size Code (SKU)</Text>
+                    <TextInput
+                      style={styles.smallInput}
+                      placeholder="e.g. M-01"
+                      placeholderTextColor="#94A3B8"
+                      value={row.sizeCode}
+                      onChangeText={(val) => {
+                        const updated = [...sizes];
+                        updated[index].sizeCode = val;
+                        setSizes(updated);
+                      }}
+                    />
+                  </View>
+                ) : null}
+                <View style={{ flex: hasCustomSizeSku ? 1.8 : 2.4, marginLeft: 8 }}>
                   <Text style={styles.subLabel}>Stock</Text>
                   <View style={styles.stockCounterRow}>
                     <TouchableOpacity
@@ -950,5 +969,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#F8FAFC',
+  },
+  skuToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 12,
+  },
+  skuToggleTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  skuToggleSubtitle: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
   },
 });

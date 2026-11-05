@@ -29,7 +29,6 @@ import {
   Store,
   Clock,
   MapPin,
-  CreditCard,
   CheckCircle,
   AlertCircle,
   Calendar,
@@ -113,7 +112,7 @@ export default function ProfileScreen() {
   };
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'shop' | 'hours' | 'location' | 'bank'>('shop');
+  const [activeTab, setActiveTab] = useState<'shop' | 'hours' | 'location'>('shop');
 
   // Full merchant details from server
   const [fullMerchant, setFullMerchant] = useState<any>(null);
@@ -146,20 +145,6 @@ export default function ProfileScreen() {
     open: '09:00',
     close: '21:00',
     daysOpen: [] as string[],
-  });
-
-  const [bankForm, setBankForm] = useState({
-    accountHolderName: '',
-    accountNumber: '',
-    ifscCode: '',
-    bankName: '',
-    upiId: '',
-  });
-
-  const [kycForm, setKycForm] = useState({
-    panNumber: '',
-    gstNumber: '',
-    panImageUri: '',
   });
 
   // Fetch complete profile on mount
@@ -198,18 +183,6 @@ export default function ProfileScreen() {
           open: data.operatingHours?.open || '09:00',
           close: data.operatingHours?.close || '21:00',
           daysOpen: data.operatingHours?.daysOpen || ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-        });
-        setBankForm({
-          accountHolderName: data.bankDetails?.accountHolderName || '',
-          accountNumber: data.bankDetails?.accountNumber || '',
-          ifscCode: data.bankDetails?.ifscCode || '',
-          bankName: data.bankDetails?.bankName || '',
-          upiId: data.bankDetails?.upiId || '',
-        });
-        setKycForm({
-          panNumber: data.kyc?.pan?.number || '',
-          gstNumber: data.kyc?.gst?.number || '',
-          panImageUri: '',
         });
       }
     } catch (err: any) {
@@ -347,63 +320,7 @@ export default function ProfileScreen() {
     }
   };
 
-  const saveBank = async () => {
-    if (!merchant?.id) return;
-    setSavingSection('bank');
-    try {
-      const res = await api.put(`merchant/${merchant.id}/bank-details`, bankForm);
-      Alert.alert('Success', 'Settlement details updated successfully!');
-      if (res.data?.merchant) {
-        setFullMerchant(res.data.merchant);
-      }
-    } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || error.message || 'Failed to update bank details.');
-    } finally {
-      setSavingSection(null);
-    }
-  };
 
-  const saveKyc = async () => {
-    if (!merchant?.id) return;
-    setSavingSection('kyc');
-    try {
-      const payload = new FormData();
-      if (kycForm.panNumber) payload.append('panNumber', kycForm.panNumber.toUpperCase());
-      if (kycForm.gstNumber) payload.append('gstNumber', kycForm.gstNumber.toUpperCase());
-      
-      if (kycForm.panImageUri) {
-        payload.append('panImage', { uri: kycForm.panImageUri, name: 'pan.jpg', type: 'image/jpeg' } as any);
-      }
-
-      const res = await api.put(`merchant/${merchant.id}/kyc`, payload, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      Alert.alert('Success', 'KYC details updated successfully!');
-      if (res.data?.merchant) {
-        setFullMerchant(res.data.merchant);
-      }
-    } catch (error: any) {
-      Alert.alert('Error', error.response?.data?.message || error.message || 'Failed to update KYC details.');
-    } finally {
-      setSavingSection(null);
-    }
-  };
-
-  const pickImage = async (field: 'panImageUri') => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'Gallery access is required.');
-      return;
-    }
-    const res = await ImagePicker.launchImageLibraryAsync({
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
-    if (!res.canceled && res.assets?.[0]?.uri) {
-      setKycForm({ ...kycForm, [field]: res.assets[0].uri });
-    }
-  };
 
   const handleToggleGender = (val: string) => {
     const isSelected = shopForm.genderCategory.includes(val);
@@ -566,14 +483,6 @@ export default function ProfileScreen() {
             <MapPin size={16} color={activeTab === 'location' ? '#FFFFFF' : '#64748B'} />
             <Text style={[styles.tabButtonText, activeTab === 'location' && styles.tabButtonTextActive]}>Location</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={() => setActiveTab('bank')}
-            style={[styles.tabButton, activeTab === 'bank' && styles.tabButtonActive]}
-          >
-            <CreditCard size={16} color={activeTab === 'bank' ? '#FFFFFF' : '#64748B'} />
-            <Text style={[styles.tabButtonText, activeTab === 'bank' && styles.tabButtonTextActive]}>Bank</Text>
-          </TouchableOpacity>
         </View>
 
         {/* Tab Content Panels */}
@@ -728,142 +637,7 @@ export default function ProfileScreen() {
           </View>
         )}
 
-        {activeTab === 'bank' && (
-          <View style={styles.formCard}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <Text style={styles.formCardTitle}>Settlement Bank Details</Text>
-              <TouchableOpacity
-                onPress={saveBank}
-                disabled={savingSection === 'bank'}
-                style={{ backgroundColor: '#1A1A1A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }}
-              >
-                {savingSection === 'bank' ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>Save</Text>
-                )}
-              </TouchableOpacity>
-            </View>
 
-            <View style={styles.readOnlyInfoGroup}>
-              <View style={styles.readOnlyItem}>
-                <Text style={styles.readOnlyLabel}>Account Holder Name</Text>
-                <TextInput
-                  style={styles.input}
-                  value={bankForm.accountHolderName}
-                  onChangeText={(val) => setBankForm({ ...bankForm, accountHolderName: val })}
-                  placeholder="Account Holder Name"
-                />
-              </View>
-
-              <View style={styles.readOnlyItem}>
-                <Text style={styles.readOnlyLabel}>Account Number</Text>
-                <TextInput
-                  style={styles.input}
-                  value={bankForm.accountNumber}
-                  onChangeText={(val) => setBankForm({ ...bankForm, accountNumber: val })}
-                  placeholder="Account Number"
-                />
-              </View>
-
-              <View style={styles.readOnlyItem}>
-                <Text style={styles.readOnlyLabel}>Bank Name</Text>
-                <TextInput
-                  style={styles.input}
-                  value={bankForm.bankName}
-                  onChangeText={(val) => setBankForm({ ...bankForm, bankName: val })}
-                  placeholder="Bank Name"
-                />
-              </View>
-
-              <View style={styles.readOnlyItem}>
-                <Text style={styles.readOnlyLabel}>IFSC Code</Text>
-                <TextInput
-                  style={[styles.input, { textTransform: 'uppercase' }]}
-                  value={bankForm.ifscCode}
-                  onChangeText={(val) => setBankForm({ ...bankForm, ifscCode: val })}
-                  placeholder="IFSC Code"
-                />
-              </View>
-
-              <View style={styles.readOnlyItem}>
-                <Text style={styles.readOnlyLabel}>Settlement UPI ID</Text>
-                <TextInput
-                  style={styles.input}
-                  value={bankForm.upiId}
-                  onChangeText={(val) => setBankForm({ ...bankForm, upiId: val })}
-                  placeholder="UPI ID (Optional)"
-                />
-              </View>
-            </View>
-
-            {/* KYC Logs */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 24, marginBottom: 12 }}>
-              <Text style={styles.subHeader}>KYC Verification Logs</Text>
-              <TouchableOpacity
-                onPress={saveKyc}
-                disabled={savingSection === 'kyc'}
-                style={{ backgroundColor: '#1A1A1A', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }}
-              >
-                {savingSection === 'kyc' ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>Save KYC</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.kycCard}>
-              <View style={styles.kycItem}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.kycTitle}>PAN Card Identity</Text>
-                  {fullMerchant?.kyc?.pan?.verified ? (
-                    <Text style={styles.kycNumber}>{fullMerchant?.kyc?.pan?.number}</Text>
-                  ) : (
-                    <TextInput
-                      style={[styles.input, { marginTop: 8, height: 40, textTransform: 'uppercase' }]}
-                      value={kycForm.panNumber}
-                      onChangeText={(val) => setKycForm({ ...kycForm, panNumber: val })}
-                      placeholder="PAN Number"
-                    />
-                  )}
-                  {!fullMerchant?.kyc?.pan?.verified && (
-                    <TouchableOpacity onPress={() => pickImage('panImageUri')} style={{ marginTop: 8 }}>
-                      <Text style={{ color: '#3B82F6', fontSize: 12, fontWeight: '600' }}>
-                        {kycForm.panImageUri ? '✓ Image Selected (Tap to change)' : '+ Upload PAN Image'}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-                {fullMerchant?.kyc?.pan?.verified ? (
-                  <View style={[styles.kycBadge, styles.kycVerified]}>
-                    <CheckCircle size={12} color="#10B981" style={{ marginRight: 4 }} />
-                    <Text style={[styles.kycBadgeText, { color: '#10B981' }]}>VERIFIED</Text>
-                  </View>
-                ) : (
-                  <View style={[styles.kycBadge, styles.kycPending]}>
-                    <AlertCircle size={12} color="#F59E0B" style={{ marginRight: 4 }} />
-                    <Text style={[styles.kycBadgeText, { color: '#F59E0B' }]}>PENDING</Text>
-                  </View>
-                )}
-              </View>
-
-              <View style={styles.kycItemDivider} />
-
-              <View style={styles.kycItem}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.kycTitle}>GST Tax Identity (Optional)</Text>
-                  <TextInput
-                    style={[styles.input, { marginTop: 8, height: 40, textTransform: 'uppercase' }]}
-                    value={kycForm.gstNumber}
-                    onChangeText={(val) => setKycForm({ ...kycForm, gstNumber: val })}
-                    placeholder="GST Number (Optional)"
-                  />
-                </View>
-              </View>
-            </View>
-          </View>
-        )}
 
         {/* Store Management */}
         <Text style={styles.sectionTitle}>Store Management</Text>
