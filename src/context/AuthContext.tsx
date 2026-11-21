@@ -84,7 +84,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         // Attempt to sync the latest merchant status from backend
         try {
-          const profileRes = await api.get('merchant/getMerchant');
+          const profileRes = await api.get('/merchant/getMerchant');
           // Response has { merchant } or is flattened
           const receivedMerchant = profileRes.data?.merchant || profileRes.data;
           
@@ -136,7 +136,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (email: string, password: string): Promise<Merchant> => {
     try {
       setLoading(true);
-      const response = await api.post('merchant/login', {
+      const response = await api.post('/merchant/login', {
         identifier: email,
         password,
       });

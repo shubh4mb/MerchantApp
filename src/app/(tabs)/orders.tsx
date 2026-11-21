@@ -537,26 +537,62 @@ export default function OrdersScreen() {
         {
           text: 'Snap with Camera',
           onPress: async () => {
-            const result = await ImagePicker.launchCameraAsync({
-              allowsEditing: true,
-              aspect: [4, 3],
-              quality: 0.8,
-            });
-            if (!result.canceled && result.assets?.[0]?.uri) {
-              uploadPhotoUri(itemId, result.assets[0].uri);
+            try {
+              let result;
+              try {
+                result = await ImagePicker.launchCameraAsync({
+                  mediaTypes: ['images'],
+                  allowsEditing: true,
+                  aspect: [4, 3],
+                  quality: 0.8,
+                });
+              } catch (err: any) {
+                if (String(err?.message || '').includes('ActivityResultLauncher')) {
+                  result = await ImagePicker.launchCameraAsync({
+                    mediaTypes: ['images'],
+                    allowsEditing: false,
+                    quality: 0.8,
+                  });
+                } else {
+                  throw err;
+                }
+              }
+              if (!result?.canceled && result?.assets?.[0]?.uri) {
+                uploadPhotoUri(itemId, result.assets[0].uri);
+              }
+            } catch (e: any) {
+              Alert.alert('Error', e.message || 'Failed to capture photo.');
             }
           },
         },
         {
           text: 'Choose from Gallery',
           onPress: async () => {
-            const result = await ImagePicker.launchImageLibraryAsync({
-              allowsEditing: true,
-              aspect: [4, 3],
-              quality: 0.8,
-            });
-            if (!result.canceled && result.assets?.[0]?.uri) {
-              uploadPhotoUri(itemId, result.assets[0].uri);
+            try {
+              let result;
+              try {
+                result = await ImagePicker.launchImageLibraryAsync({
+                  mediaTypes: ['images'],
+                  allowsEditing: true,
+                  aspect: [4, 3],
+                  quality: 0.8,
+                });
+              } catch (err: any) {
+                if (String(err?.message || '').includes('ActivityResultLauncher')) {
+                  result = await ImagePicker.launchImageLibraryAsync({
+                    mediaTypes: ['images'],
+                    allowsEditing: false,
+                    quality: 0.8,
+                  });
+                } else {
+                  throw err;
+                }
+              }
+              if (!result?.canceled && result?.assets?.[0]?.uri) {
+                uploadPhotoUri(itemId, result.assets[0].uri);
+              }
+            } catch (e: any) {
+              Alert.alert('Error', e.message || 'Failed to pick photo.');
             }
           },
         },
@@ -716,7 +752,7 @@ export default function OrdersScreen() {
   const handlePickDamagePhoto = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsMultipleSelection: true,
         quality: 0.8,
       });
@@ -741,6 +777,7 @@ export default function OrdersScreen() {
       }
 
       const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
         quality: 0.8,
       });
 
@@ -1002,7 +1039,7 @@ export default function OrdersScreen() {
             <View style={styles.divider} />
 
             <View style={styles.itemsSection}>
-              {item.items.map((prod, idx) => {
+              {(item.items || []).map((prod, idx) => {
                 const isOos = prod.status === 'out_of_stock';
                 const isOrderCancelled = item.status === 'CANCELLED';
 
@@ -1216,7 +1253,7 @@ export default function OrdersScreen() {
 
             {/* Courier Items */}
             <View style={styles.itemsSection}>
-              {item.items.map((prod, idx) => (
+              {(item.items || []).map((prod, idx) => (
                 <View key={idx} style={styles.itemRow}>
                   {prod.image ? (
                     <Image
@@ -1298,7 +1335,7 @@ export default function OrdersScreen() {
                 {/* Return Items */}
                 <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.05)' }}>
                   <Text style={styles.returnSectionSub}>Items to Return:</Text>
-                  {item.returnRequest.items.map((rItem, idx) => (
+                  {(item.returnRequest.items || []).map((rItem, idx) => (
                     <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
                       {rItem.image ? (
                         <Image source={{ uri: rItem.image }} style={{ width: 28, height: 28, borderRadius: 6, marginRight: 8 }} resizeMode="cover" />
@@ -1640,7 +1677,7 @@ export default function OrdersScreen() {
                         ) : null}
                       </View>
                     )}
-                    {packingOrder.items.map((item) => {
+                    {(packingOrder?.items || []).map((item) => {
                       const isOutOfStock = item.status === 'out_of_stock';
                       const itemPhotos = packingPhotos.filter(p => p.itemId === item._id);
                       const hasProof = itemPhotos.length > 0;

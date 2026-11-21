@@ -52,7 +52,7 @@ export default function ForgotPasswordScreen() {
     setError(null);
     setLoading(true);
     try {
-      await api.post('merchant/auth/forgot-password', {
+      await api.post('/merchant/auth/forgot-password', {
         email: email.trim().toLowerCase(),
       });
       setStep(2);
@@ -83,7 +83,7 @@ export default function ForgotPasswordScreen() {
 
     setLoading(true);
     try {
-      await api.post('merchant/auth/reset-password', {
+      await api.post('/merchant/auth/reset-password', {
         email: email.trim().toLowerCase(),
         otp: otp.trim(),
         newPassword,

@@ -63,11 +63,25 @@ export default function ProfileScreen() {
         return;
       }
 
-      const res = await ImagePicker.launchImageLibraryAsync({
-        allowsEditing: true,
-        aspect: type === 'logo' ? [1, 1] : [16, 9],
-        quality: 0.85,
-      });
+      let res;
+      try {
+        res = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          aspect: type === 'logo' ? [1, 1] : [16, 9],
+          quality: 0.85,
+        });
+      } catch (err: any) {
+        if (String(err?.message || '').includes('ActivityResultLauncher')) {
+          res = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            allowsEditing: false,
+            quality: 0.85,
+          });
+        } else {
+          throw err;
+        }
+      }
 
       if (res.canceled || !res.assets?.[0]?.uri) return;
 
@@ -87,7 +101,13 @@ export default function ProfileScreen() {
         type: fileType,
       } as any);
 
-      const response = await api.put(`merchant/${merchant.id}/branding`, formData, {
+      const mId = merchant?.id || (merchant as any)?._id;
+      if (!mId) {
+        Alert.alert('Error', 'Merchant session not found. Please log in again.');
+        return;
+      }
+
+      const response = await api.put(`/merchant/${mId}/branding`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
@@ -151,7 +171,7 @@ export default function ProfileScreen() {
   const fetchProfile = async () => {
     try {
       setLoadingProfile(true);
-      const res = await api.get('merchant/getMerchant');
+      const res = await api.get('/merchant/getMerchant');
       const data = res.data?.merchant || res.data;
       if (data) {
         setFullMerchant(data);
@@ -198,10 +218,11 @@ export default function ProfileScreen() {
   }, []);
 
   const handleToggleOnline = async (newVal: boolean) => {
-    if (!merchant?.id) return;
+    const mId = merchant?.id || (merchant as any)?._id;
+    if (!mId) return;
     setUpdatingStatus(true);
     try {
-      const res = await api.patch(`merchant/${merchant.id}/toggle-online`, {
+      const res = await api.patch(`/merchant/${mId}/toggle-online`, {
         isOnline: newVal,
       });
       const updatedOnline = typeof res.data?.isOnline === 'boolean' ? res.data.isOnline : newVal;
@@ -239,7 +260,8 @@ export default function ProfileScreen() {
 
   // Section Save functions
   const saveShopInfo = async () => {
-    if (!merchant?.id) return;
+    const mId = merchant?.id || (merchant as any)?._id;
+    if (!mId) return;
     setSavingSection('shop');
     try {
       const payload = new FormData();
@@ -259,7 +281,7 @@ export default function ProfileScreen() {
       payload.append('latitude', String(addressForm.latitude));
       payload.append('longitude', String(addressForm.longitude));
 
-      const res = await api.put(`merchant/${merchant.id}/shop-details`, payload, {
+      const res = await api.put(`/merchant/${mId}/shop-details`, payload, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
@@ -280,7 +302,8 @@ export default function ProfileScreen() {
   };
 
   const saveLocation = async () => {
-    if (!merchant?.id) return;
+    const mId = merchant?.id || (merchant as any)?._id;
+    if (!mId) return;
     setSavingSection('location');
     try {
       const payload = new FormData();
@@ -289,7 +312,7 @@ export default function ProfileScreen() {
       payload.append('latitude', String(addressForm.latitude));
       payload.append('longitude', String(addressForm.longitude));
 
-      const res = await api.put(`merchant/${merchant.id}/shop-details`, payload, {
+      const res = await api.put(`/merchant/${mId}/shop-details`, payload, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
@@ -305,10 +328,11 @@ export default function ProfileScreen() {
   };
 
   const saveHours = async () => {
-    if (!merchant?.id) return;
+    const mId = merchant?.id || (merchant as any)?._id;
+    if (!mId) return;
     setSavingSection('hours');
     try {
-      const res = await api.put(`merchant/${merchant.id}/operating-hours`, operatingHours);
+      const res = await api.put(`/merchant/${mId}/operating-hours`, operatingHours);
       Alert.alert('Success', 'Operating timings updated successfully!');
       if (res.data?.merchant) {
         setFullMerchant(res.data.merchant);

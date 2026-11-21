@@ -23,7 +23,7 @@ export default function PaymentScreen() {
     if (!merchant) return;
     setLoading(true);
     try {
-      const response = await api.get('merchant/registration-fee/amount');
+      const response = await api.get('/merchant/registration-fee/amount');
       // Store in paise to keep compatibility with existing UI that divides by 100
       setFeeDetails({ amount: response.data.feeAmount * 100 });
     } catch (err: any) {
@@ -41,8 +41,9 @@ export default function PaymentScreen() {
     if (feeDetails?.amount === 0) {
       setLoading(true);
       try {
-        if (!merchant?.id) return;
-        const response = await api.post(`merchant/${merchant.id}/registration-fee/create-order`);
+        const mId = merchant?.id || (merchant as any)?._id;
+        if (!mId) return;
+        const response = await api.post(`/merchant/${mId}/registration-fee/create-order`);
         if (response.data?.status === 'active') {
           Alert.alert('Activated', 'Registration fee is waived. Your account is active.', [
             {
@@ -80,7 +81,7 @@ export default function PaymentScreen() {
   const handleCheckPaymentStatus = async () => {
     setLoading(true);
     try {
-      const response = await api.get('merchant/getMerchant');
+      const response = await api.get('/merchant/getMerchant');
       const latestMerchant = response.data?.merchant;
       if (latestMerchant) {
         updateMerchantState({

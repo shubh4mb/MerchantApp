@@ -1,9 +1,16 @@
 import React from 'react';
 import { Tabs, router } from 'expo-router';
 import { ClipboardList, Package, DollarSign, Store, LayoutDashboard, Bell } from 'lucide-react-native';
-import { TouchableOpacity } from 'react-native';
+import { TouchableOpacity, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function TabsLayout() {
+  const insets = useSafeAreaInsets();
+  const bottomInset = insets.bottom;
+  const contentHeight = 58;
+  const bottomPadding = bottomInset > 0 ? bottomInset : (Platform.OS === 'ios' ? 12 : 8);
+  const tabHeight = contentHeight + bottomPadding;
+
   return (
     <Tabs
       screenOptions={{
@@ -18,8 +25,9 @@ export default function TabsLayout() {
           backgroundColor: '#FFFFFF',
           borderTopWidth: 1,
           borderTopColor: '#F1F5F9',
-          height: 64,
+          height: tabHeight,
           paddingTop: 8,
+          paddingBottom: bottomPadding,
           shadowColor: '#000000',
           shadowOffset: { width: 0, height: -2 },
           shadowOpacity: 0.03,

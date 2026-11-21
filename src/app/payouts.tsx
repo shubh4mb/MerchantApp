@@ -98,7 +98,7 @@ export default function PayoutsScreen() {
         getMerchantPayoutHistory(1, 50).catch(() => ({ payouts: [] })),
         getMerchantCurrentWeek().catch(() => null),
         getMerchantWallet().catch(() => ({ balance: 0 })),
-        api.get('merchant/getMerchant').catch(() => null),
+        api.get('/merchant/getMerchant').catch(() => null),
       ]);
 
       const list: PayoutRecord[] = historyRes?.history || historyRes?.payouts || [];

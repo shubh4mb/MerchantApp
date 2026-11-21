@@ -83,7 +83,7 @@ export default function BankAndDocumentsScreen() {
   const fetchProfile = async () => {
     try {
       setLoadingProfile(true);
-      const res = await api.get('merchant/getMerchant');
+      const res = await api.get('/merchant/getMerchant');
       const data = res.data?.merchant || res.data;
       if (data) {
         setFullMerchant(data);
@@ -126,13 +126,34 @@ export default function BankAndDocumentsScreen() {
       return;
     }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      allowsEditing: true,
-      quality: 0.8,
-    });
+    try {
+      const pickerOptions: ImagePicker.ImagePickerOptions = {
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.8,
+      };
 
-    if (!result.canceled && result.assets?.[0]?.uri) {
-      setKycForm({ ...kycForm, [field]: result.assets[0].uri });
+      let result;
+      try {
+        result = await ImagePicker.launchImageLibraryAsync(pickerOptions);
+      } catch (err: any) {
+        if (String(err?.message || '').includes('ActivityResultLauncher')) {
+          result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            allowsEditing: false,
+            quality: 0.8,
+          });
+        } else {
+          throw err;
+        }
+      }
+
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        setKycForm({ ...kycForm, [field]: result.assets[0].uri });
+      }
+    } catch (err: any) {
+      console.error('Document picker error:', err);
+      Alert.alert('Image Selection', err.message || 'Failed to select image.');
     }
   };
 
@@ -147,9 +168,15 @@ export default function BankAndDocumentsScreen() {
       return;
     }
 
+    const merchantId = merchant?.id || (merchant as any)?._id;
+    if (!merchantId) {
+      Alert.alert('Error', 'Merchant session not found. Please log in again.');
+      return;
+    }
+
     try {
       setSavingSection('bank');
-      const res = await api.put(`merchant/${merchant?.id}/bank-details`, {
+      const res = await api.put(`/merchant/${merchantId}/bank-details`, {
         bankName: bankForm.bankName.trim(),
         accountNumber: bankForm.accountNumber.trim(),
         ifscCode: bankForm.ifscCode.trim().toUpperCase(),
@@ -213,7 +240,13 @@ export default function BankAndDocumentsScreen() {
         formData.append('bankProofImage', { uri: kycForm.bankProofImageUri, name: bankProofName, type: 'image/jpeg' } as any);
       }
 
-      const res = await api.put(`merchant/${merchant?.id}/kyc`, formData, {
+      const merchantId = merchant?.id || (merchant as any)?._id;
+      if (!merchantId) {
+        Alert.alert('Error', 'Merchant session not found. Please log in again.');
+        return;
+      }
+
+      const res = await api.put(`/merchant/${merchantId}/kyc`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 

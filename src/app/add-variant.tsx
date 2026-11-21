@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -124,48 +124,84 @@ export default function AddVariantScreen() {
     setSizes(sizes.filter((_, idx) => idx !== index));
   };
 
+  const isPickingImageRef = useRef(false);
+
   const handlePickPhoto = async () => {
-    const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
-    const galleryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (isPickingImageRef.current) return;
 
-    if (!cameraPermission.granted || !galleryPermission.granted) {
-      Alert.alert('Permission Denied', 'Camera and Photo Library access is required.');
-      return;
+    try {
+      isPickingImageRef.current = true;
+      const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
+      const galleryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!cameraPermission.granted || !galleryPermission.granted) {
+        Alert.alert('Permission Denied', 'Camera and Photo Library access is required.');
+        isPickingImageRef.current = false;
+        return;
+      }
+
+      const launchPickerForVariant = async (type: 'camera' | 'gallery') => {
+        try {
+          const pickerOptions: ImagePicker.ImagePickerOptions = {
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [4, 5],
+            quality: 0.4,
+          };
+
+          let result;
+          if (type === 'camera') {
+            result = await ImagePicker.launchCameraAsync(pickerOptions);
+          } else {
+            result = await ImagePicker.launchImageLibraryAsync(pickerOptions);
+          }
+
+          if (!result.canceled && result.assets?.[0]?.uri) {
+            setSelectedImages([...selectedImages, result.assets[0].uri]);
+          }
+        } catch (err: any) {
+          console.error('Variant photo picker error:', err);
+          if (String(err?.message || '').includes('ActivityResultLauncher')) {
+            try {
+              let fallbackResult;
+              const fallbackOptions: ImagePicker.ImagePickerOptions = {
+                mediaTypes: ['images'],
+                allowsEditing: false,
+                quality: 0.4,
+              };
+              if (type === 'camera') {
+                fallbackResult = await ImagePicker.launchCameraAsync(fallbackOptions);
+              } else {
+                fallbackResult = await ImagePicker.launchImageLibraryAsync(fallbackOptions);
+              }
+              if (!fallbackResult.canceled && fallbackResult.assets?.[0]?.uri) {
+                setSelectedImages([...selectedImages, fallbackResult.assets[0].uri]);
+                return;
+              }
+            } catch (fallbackErr) {
+              console.error('Fallback variant picker error:', fallbackErr);
+            }
+          }
+          Alert.alert('Image Selection', err.message || 'Failed to select image.');
+        } finally {
+          isPickingImageRef.current = false;
+        }
+      };
+
+      Alert.alert(
+        'Variant Image',
+        'Choose image source:',
+        [
+          { text: 'Camera (Snap Photo)', onPress: () => launchPickerForVariant('camera') },
+          { text: 'Choose from Gallery', onPress: () => launchPickerForVariant('gallery') },
+          { text: 'Cancel', style: 'cancel', onPress: () => { isPickingImageRef.current = false; } },
+        ],
+        { onDismiss: () => { isPickingImageRef.current = false; } }
+      );
+    } catch (permErr: any) {
+      isPickingImageRef.current = false;
+      Alert.alert('Error', permErr.message || 'Failed to initialize picker.');
     }
-
-    Alert.alert(
-      'Variant Image',
-      'Choose image source:',
-      [
-        {
-          text: 'Camera (Snap Photo)',
-          onPress: async () => {
-            const result = await ImagePicker.launchCameraAsync({
-              allowsEditing: true,
-              aspect: [4, 5],
-              quality: 0.4,
-            });
-            if (!result.canceled && result.assets?.[0]?.uri) {
-              setSelectedImages([...selectedImages, result.assets[0].uri]);
-            }
-          },
-        },
-        {
-          text: 'Choose from Gallery',
-          onPress: async () => {
-            const result = await ImagePicker.launchImageLibraryAsync({
-              allowsEditing: true,
-              aspect: [4, 5],
-              quality: 0.4,
-            });
-            if (!result.canceled && result.assets?.[0]?.uri) {
-              setSelectedImages([...selectedImages, result.assets[0].uri]);
-            }
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
   };
 
   const handleRemoveImage = (index: number) => {

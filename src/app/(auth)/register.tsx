@@ -81,7 +81,7 @@ export default function RegisterScreen() {
     setLoading(true);
 
     try {
-      await api.post('merchant/auth/send-email-otp', {
+      await api.post('/merchant/auth/send-email-otp', {
         email: trimmedEmail,
         phoneNumber: trimmedPhone,
         password,
@@ -104,7 +104,7 @@ export default function RegisterScreen() {
     setError('');
     setLoading(true);
     try {
-      await api.post('merchant/auth/send-email-otp', {
+      await api.post('/merchant/auth/send-email-otp', {
         email: email.trim().toLowerCase(),
         phoneNumber: phoneNumber.trim(),
         password,
@@ -134,13 +134,13 @@ export default function RegisterScreen() {
 
     try {
       // Step 1: Verify OTP on backend
-      const verifyRes = await api.post('merchant/auth/verify-email-otp', {
+      const verifyRes = await api.post('/merchant/auth/verify-email-otp', {
         email: trimmedEmail,
         otp: trimmedOtp,
       });
 
       // Step 2: Register/complete merchant registration on backend (mirroring website FlashFitsSignUp)
-      const regRes = await api.post('merchant/register', {
+      const regRes = await api.post('/merchant/register', {
         identifier: trimmedEmail,
         password,
         phoneNumber: trimmedPhone,

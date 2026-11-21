@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -387,53 +387,88 @@ export default function EditProductScreen() {
     setSizes(sizes.filter((_, idx) => idx !== index));
   };
 
+  const isPickingImageRef = useRef(false);
+
   const handlePickPhoto = async () => {
     if (selectedImages.length >= 4) {
       Alert.alert('Limit Reached', 'Maximum 4 images allowed.');
       return;
     }
+    if (isPickingImageRef.current) return;
 
-    const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
-    const galleryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    try {
+      isPickingImageRef.current = true;
+      const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
+      const galleryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-    if (!cameraPermission.granted || !galleryPermission.granted) {
-      Alert.alert('Permission Denied', 'Camera and Photo Library access is required.');
-      return;
+      if (!cameraPermission.granted || !galleryPermission.granted) {
+        Alert.alert('Permission Denied', 'Camera and Photo Library access is required.');
+        isPickingImageRef.current = false;
+        return;
+      }
+
+      const launchPickerForEdit = async (type: 'camera' | 'gallery') => {
+        try {
+          const pickerOptions: ImagePicker.ImagePickerOptions = {
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [4, 5],
+            quality: 0.4,
+          };
+
+          let result;
+          if (type === 'camera') {
+            result = await ImagePicker.launchCameraAsync(pickerOptions);
+          } else {
+            result = await ImagePicker.launchImageLibraryAsync(pickerOptions);
+          }
+
+          if (!result.canceled && result.assets?.[0]?.uri) {
+            uploadNewImage(result.assets[0].uri);
+          }
+        } catch (err: any) {
+          console.error('Edit photo picker error:', err);
+          if (String(err?.message || '').includes('ActivityResultLauncher')) {
+            try {
+              let fallbackResult;
+              const fallbackOptions: ImagePicker.ImagePickerOptions = {
+                mediaTypes: ['images'],
+                allowsEditing: false,
+                quality: 0.4,
+              };
+              if (type === 'camera') {
+                fallbackResult = await ImagePicker.launchCameraAsync(fallbackOptions);
+              } else {
+                fallbackResult = await ImagePicker.launchImageLibraryAsync(fallbackOptions);
+              }
+              if (!fallbackResult.canceled && fallbackResult.assets?.[0]?.uri) {
+                uploadNewImage(fallbackResult.assets[0].uri);
+                return;
+              }
+            } catch (fallbackErr) {
+              console.error('Fallback edit picker error:', fallbackErr);
+            }
+          }
+          Alert.alert('Image Selection', err.message || 'Failed to select image.');
+        } finally {
+          isPickingImageRef.current = false;
+        }
+      };
+
+      Alert.alert(
+        'Upload Photo',
+        'Choose image source:',
+        [
+          { text: 'Camera', onPress: () => launchPickerForEdit('camera') },
+          { text: 'Gallery', onPress: () => launchPickerForEdit('gallery') },
+          { text: 'Cancel', style: 'cancel', onPress: () => { isPickingImageRef.current = false; } },
+        ],
+        { onDismiss: () => { isPickingImageRef.current = false; } }
+      );
+    } catch (permErr: any) {
+      isPickingImageRef.current = false;
+      Alert.alert('Error', permErr.message || 'Failed to initialize picker.');
     }
-
-    Alert.alert(
-      'Upload Photo',
-      'Choose image source:',
-      [
-        {
-          text: 'Camera',
-          onPress: async () => {
-            const result = await ImagePicker.launchCameraAsync({
-              allowsEditing: true,
-              aspect: [4, 5],
-              quality: 0.4,
-            });
-            if (!result.canceled && result.assets?.[0]?.uri) {
-              uploadNewImage(result.assets[0].uri);
-            }
-          },
-        },
-        {
-          text: 'Gallery',
-          onPress: async () => {
-            const result = await ImagePicker.launchImageLibraryAsync({
-              allowsEditing: true,
-              aspect: [4, 5],
-              quality: 0.4,
-            });
-            if (!result.canceled && result.assets?.[0]?.uri) {
-              uploadNewImage(result.assets[0].uri);
-            }
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
   };
 
   const moveImage = (index: number, direction: 'left' | 'right') => {

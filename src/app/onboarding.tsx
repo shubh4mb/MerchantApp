@@ -502,26 +502,62 @@ export default function OnboardingScreen() {
       {
         text: 'Camera',
         onPress: async () => {
-          const res = await ImagePicker.launchCameraAsync({
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.8,
-          });
-          if (!res.canceled && res.assets?.[0]?.uri) {
-            onSelected(res.assets[0].uri);
+          try {
+            let res;
+            try {
+              res = await ImagePicker.launchCameraAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.8,
+              });
+            } catch (err: any) {
+              if (String(err?.message || '').includes('ActivityResultLauncher')) {
+                res = await ImagePicker.launchCameraAsync({
+                  mediaTypes: ['images'],
+                  allowsEditing: false,
+                  quality: 0.8,
+                });
+              } else {
+                throw err;
+              }
+            }
+            if (!res?.canceled && res?.assets?.[0]?.uri) {
+              onSelected(res.assets[0].uri);
+            }
+          } catch (e: any) {
+            Alert.alert('Image Selection', e.message || 'Failed to capture photo.');
           }
         },
       },
       {
         text: 'Gallery',
         onPress: async () => {
-          const res = await ImagePicker.launchImageLibraryAsync({
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.8,
-          });
-          if (!res.canceled && res.assets?.[0]?.uri) {
-            onSelected(res.assets[0].uri);
+          try {
+            let res;
+            try {
+              res = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.8,
+              });
+            } catch (err: any) {
+              if (String(err?.message || '').includes('ActivityResultLauncher')) {
+                res = await ImagePicker.launchImageLibraryAsync({
+                  mediaTypes: ['images'],
+                  allowsEditing: false,
+                  quality: 0.8,
+                });
+              } else {
+                throw err;
+              }
+            }
+            if (!res?.canceled && res?.assets?.[0]?.uri) {
+              onSelected(res.assets[0].uri);
+            }
+          } catch (e: any) {
+            Alert.alert('Image Selection', e.message || 'Failed to pick photo.');
           }
         },
       },

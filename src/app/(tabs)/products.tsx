@@ -597,13 +597,27 @@ export default function ProductsScreen() {
 
   const captureImageFromCamera = async (productId: string, variantIndex: number, variantId: string) => {
     try {
-      const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: true,
-        aspect: [4, 5],
-        quality: 0.8,
-      });
+      let result;
+      try {
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          aspect: [4, 5],
+          quality: 0.8,
+        });
+      } catch (err: any) {
+        if (String(err?.message || '').includes('ActivityResultLauncher')) {
+          result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ['images'],
+            allowsEditing: false,
+            quality: 0.8,
+          });
+        } else {
+          throw err;
+        }
+      }
 
-      if (!result.canceled && result.assets?.[0]?.uri) {
+      if (!result?.canceled && result?.assets?.[0]?.uri) {
         await uploadCapturedImage(result.assets[0].uri, productId, variantIndex, variantId);
       }
     } catch (e) {
@@ -613,13 +627,27 @@ export default function ProductsScreen() {
 
   const pickImageFromGallery = async (productId: string, variantIndex: number, variantId: string) => {
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        allowsEditing: true,
-        aspect: [4, 5],
-        quality: 0.8,
-      });
+      let result;
+      try {
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          aspect: [4, 5],
+          quality: 0.8,
+        });
+      } catch (err: any) {
+        if (String(err?.message || '').includes('ActivityResultLauncher')) {
+          result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            allowsEditing: false,
+            quality: 0.8,
+          });
+        } else {
+          throw err;
+        }
+      }
 
-      if (!result.canceled && result.assets?.[0]?.uri) {
+      if (!result?.canceled && result?.assets?.[0]?.uri) {
         await uploadCapturedImage(result.assets[0].uri, productId, variantIndex, variantId);
       }
     } catch (e) {
@@ -846,7 +874,7 @@ export default function ProductsScreen() {
       const targetVarId = selectedVariant._id;
 
       await api.patch(
-        `merchant/updateMultipleVariantSizes/${targetProdId}/${targetVarId}`,
+        `/merchant/updateMultipleVariantSizes/${targetProdId}/${targetVarId}`,
         { sizes: formattedSizes }
       );
 

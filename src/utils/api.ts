@@ -196,7 +196,10 @@ export const createProductFull = async (formData: FormData) => {
   return res.data;
 };
 
-export const analyzeProductWithAi = async (data: FormData | { image: string; mimeType?: string }) => {
+export const analyzeProductWithAi = async (
+  data: FormData | { image: string; mimeType?: string },
+  signal?: AbortSignal
+) => {
   const isFormData =
     (typeof FormData !== 'undefined' && data instanceof FormData) ||
     Boolean(data && typeof (data as any).append === 'function');
@@ -205,7 +208,8 @@ export const analyzeProductWithAi = async (data: FormData | { image: string; mim
     headers: {
       'Content-Type': isFormData ? 'multipart/form-data' : 'application/json',
     },
-    timeout: 60000,
+    timeout: 30000,
+    signal,
   });
   return res.data?.data ?? res.data;
 };

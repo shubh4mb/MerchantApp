@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -163,7 +163,23 @@ export default function AddProductScreen() {
     setSizes(sizes.filter((_, idx) => idx !== index));
   };
 
+  const aiAbortControllerRef = useRef<AbortController | null>(null);
+
+  const handleCancelAiAnalysis = () => {
+    if (aiAbortControllerRef.current) {
+      aiAbortControllerRef.current.abort();
+      aiAbortControllerRef.current = null;
+    }
+    setAnalyzingAi(false);
+  };
+
   const runAiAnalysisOnUri = async (uri: string, initialBase64?: string) => {
+    if (aiAbortControllerRef.current) {
+      aiAbortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    aiAbortControllerRef.current = abortController;
+
     try {
       setAnalyzingAi(true);
       setError('');
@@ -186,9 +202,19 @@ export default function AddProductScreen() {
           type: mimeType,
         } as any);
 
-        metadata = await analyzeProductWithAi(formData);
+        metadata = await analyzeProductWithAi(formData, abortController.signal);
       } catch (formErr: any) {
-        console.warn('FormData AI analysis failed, trying base64 fallback:', formErr?.message || formErr);
+        if (abortController.signal.aborted) {
+          return;
+        }
+
+        // Only fallback to base64 if it's a native FormData transport error (no HTTP response from server)
+        const hasServerResponse = Boolean(formErr.response);
+        if (hasServerResponse) {
+          throw formErr;
+        }
+
+        console.warn('FormData AI analysis network error, trying base64 fallback:', formErr?.message || formErr);
 
         // Fallback strategy: Base64 JSON
         let base64 = initialBase64;
@@ -203,10 +229,14 @@ export default function AddProductScreen() {
         }
 
         if (base64) {
-          metadata = await analyzeProductWithAi({ image: base64, mimeType });
+          metadata = await analyzeProductWithAi({ image: base64, mimeType }, abortController.signal);
         } else {
           throw formErr;
         }
+      }
+
+      if (abortController.signal.aborted) {
+        return;
       }
 
       if (!metadata) {
@@ -297,72 +327,108 @@ export default function AddProductScreen() {
         [{ text: 'OK' }]
       );
     } catch (err: any) {
+      if (abortController.signal.aborted) {
+        return;
+      }
       console.error('AI Analysis failed:', err);
-      console.error('AI Analysis request error details:', {
-        url: err.config?.url,
-        baseURL: err.config?.baseURL,
-        status: err.response?.status,
-        data: err.response?.data,
-        message: err.message,
-      });
-      Alert.alert('AI Analysis Error', err.response?.data?.message || err.message || 'Failed to analyze image with AI.');
+      const isTimeout = err.code === 'ECONNABORTED' || err.message?.includes('timeout');
+      const friendlyMessage = isTimeout
+        ? 'AI analysis timed out. Google AI service is experiencing high traffic spikes. Please try again or enter details manually.'
+        : (err.response?.data?.message || err.message || 'Failed to analyze image with AI.');
+      Alert.alert('AI Analysis Notice', friendlyMessage);
     } finally {
+      if (aiAbortControllerRef.current === abortController) {
+        aiAbortControllerRef.current = null;
+      }
       setAnalyzingAi(false);
     }
   };
 
+  const isPickingImageRef = useRef(false);
+
   const handlePickAndAnalyzeAi = async (source?: 'camera' | 'gallery') => {
-    if (analyzingAi) return;
+    if (analyzingAi || isPickingImageRef.current) return;
 
-    const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
-    const galleryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    try {
+      isPickingImageRef.current = true;
+      const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
+      const galleryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-    if (!cameraPermission.granted || !galleryPermission.granted) {
-      Alert.alert('Permission Denied', 'Camera and Photo Library access is required.');
-      return;
-    }
-
-    const launchPicker = async (type: 'camera' | 'gallery') => {
-      try {
-        let result;
-        if (type === 'camera') {
-          result = await ImagePicker.launchCameraAsync({
-            allowsEditing: true,
-            aspect: [4, 5],
-            quality: 0.5,
-            base64: true,
-          });
-        } else {
-          result = await ImagePicker.launchImageLibraryAsync({
-            allowsEditing: true,
-            aspect: [4, 5],
-            quality: 0.5,
-            base64: true,
-          });
-        }
-
-        if (!result.canceled && result.assets?.[0]?.uri) {
-          const asset = result.assets[0];
-          await runAiAnalysisOnUri(asset.uri, asset.base64 || undefined);
-        }
-      } catch (err: any) {
-        console.error('Image pick error:', err);
-        Alert.alert('Error', err.message || 'Failed to select image.');
+      if (!cameraPermission.granted || !galleryPermission.granted) {
+        Alert.alert('Permission Denied', 'Camera and Photo Library access is required.');
+        return;
       }
-    };
 
-    if (source) {
-      await launchPicker(source);
-    } else {
-      Alert.alert(
-        '✨ AI Smart Auto-Fill',
-        'Choose product photo source for AI to analyze:',
-        [
-          { text: '📷 Camera', onPress: () => launchPicker('camera') },
-          { text: '🖼️ Gallery', onPress: () => launchPicker('gallery') },
-          { text: 'Cancel', style: 'cancel' },
-        ]
-      );
+      const launchPicker = async (type: 'camera' | 'gallery') => {
+        try {
+          const pickerOptions: ImagePicker.ImagePickerOptions = {
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [4, 5],
+            quality: 0.5,
+            base64: true,
+          };
+
+          let result;
+          if (type === 'camera') {
+            result = await ImagePicker.launchCameraAsync(pickerOptions);
+          } else {
+            result = await ImagePicker.launchImageLibraryAsync(pickerOptions);
+          }
+
+          if (!result.canceled && result.assets?.[0]?.uri) {
+            const asset = result.assets[0];
+            await runAiAnalysisOnUri(asset.uri, asset.base64 || undefined);
+          }
+        } catch (err: any) {
+          console.error('Image pick error:', err);
+          // If the native launcher contract was dropped by Android OS, retry cleanly once without cropping contract
+          if (String(err?.message || '').includes('ActivityResultLauncher')) {
+            try {
+              let fallbackResult;
+              const fallbackOptions: ImagePicker.ImagePickerOptions = {
+                mediaTypes: ['images'],
+                allowsEditing: false,
+                quality: 0.5,
+                base64: true,
+              };
+              if (type === 'camera') {
+                fallbackResult = await ImagePicker.launchCameraAsync(fallbackOptions);
+              } else {
+                fallbackResult = await ImagePicker.launchImageLibraryAsync(fallbackOptions);
+              }
+              if (!fallbackResult.canceled && fallbackResult.assets?.[0]?.uri) {
+                const asset = fallbackResult.assets[0];
+                await runAiAnalysisOnUri(asset.uri, asset.base64 || undefined);
+                return;
+              }
+            } catch (fallbackErr) {
+              console.error('Fallback picker error:', fallbackErr);
+            }
+          }
+          Alert.alert('Image Selection', err.message || 'Failed to select image. Please try again.');
+        } finally {
+          isPickingImageRef.current = false;
+        }
+      };
+
+      if (source) {
+        await launchPicker(source);
+      } else {
+        Alert.alert(
+          '✨ AI Smart Auto-Fill',
+          'Choose product photo source for AI to analyze:',
+          [
+            { text: '📷 Camera', onPress: () => launchPicker('camera') },
+            { text: '🖼️ Gallery', onPress: () => launchPicker('gallery') },
+            { text: 'Cancel', style: 'cancel', onPress: () => { isPickingImageRef.current = false; } },
+          ],
+          { onDismiss: () => { isPickingImageRef.current = false; } }
+        );
+      }
+    } catch (permErr: any) {
+      isPickingImageRef.current = false;
+      Alert.alert('Error', permErr.message || 'Failed to initialize picker.');
     }
   };
 
@@ -371,48 +437,81 @@ export default function AddProductScreen() {
       Alert.alert('Limit Reached', 'Maximum 4 images allowed per product variation.');
       return;
     }
+    if (isPickingImageRef.current) return;
 
-    const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
-    const galleryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    try {
+      isPickingImageRef.current = true;
+      const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
+      const galleryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-    if (!cameraPermission.granted || !galleryPermission.granted) {
-      Alert.alert('Permission Denied', 'Camera and Photo Library access is required.');
-      return;
+      if (!cameraPermission.granted || !galleryPermission.granted) {
+        Alert.alert('Permission Denied', 'Camera and Photo Library access is required.');
+        isPickingImageRef.current = false;
+        return;
+      }
+
+      const launchPickerForPhoto = async (type: 'camera' | 'gallery') => {
+        try {
+          const pickerOptions: ImagePicker.ImagePickerOptions = {
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            aspect: [4, 5],
+            quality: 0.4,
+          };
+
+          let result;
+          if (type === 'camera') {
+            result = await ImagePicker.launchCameraAsync(pickerOptions);
+          } else {
+            result = await ImagePicker.launchImageLibraryAsync(pickerOptions);
+          }
+
+          if (!result.canceled && result.assets?.[0]?.uri) {
+            setSelectedImages([...selectedImages, result.assets[0].uri]);
+          }
+        } catch (err: any) {
+          console.error('Photo picker error:', err);
+          if (String(err?.message || '').includes('ActivityResultLauncher')) {
+            try {
+              let fallbackResult;
+              const fallbackOptions: ImagePicker.ImagePickerOptions = {
+                mediaTypes: ['images'],
+                allowsEditing: false,
+                quality: 0.4,
+              };
+              if (type === 'camera') {
+                fallbackResult = await ImagePicker.launchCameraAsync(fallbackOptions);
+              } else {
+                fallbackResult = await ImagePicker.launchImageLibraryAsync(fallbackOptions);
+              }
+              if (!fallbackResult.canceled && fallbackResult.assets?.[0]?.uri) {
+                setSelectedImages([...selectedImages, fallbackResult.assets[0].uri]);
+                return;
+              }
+            } catch (fallbackErr) {
+              console.error('Fallback photo picker error:', fallbackErr);
+            }
+          }
+          Alert.alert('Image Selection', err.message || 'Failed to select image. Please try again.');
+        } finally {
+          isPickingImageRef.current = false;
+        }
+      };
+
+      Alert.alert(
+        'Product Image',
+        'Choose image source:',
+        [
+          { text: '📷 Camera', onPress: () => launchPickerForPhoto('camera') },
+          { text: '🖼️ Gallery', onPress: () => launchPickerForPhoto('gallery') },
+          { text: 'Cancel', style: 'cancel', onPress: () => { isPickingImageRef.current = false; } },
+        ],
+        { onDismiss: () => { isPickingImageRef.current = false; } }
+      );
+    } catch (permErr: any) {
+      isPickingImageRef.current = false;
+      Alert.alert('Error', permErr.message || 'Failed to initialize picker.');
     }
-
-    Alert.alert(
-      'Product Image',
-      'Choose image source:',
-      [
-        {
-          text: '📷 Camera',
-          onPress: async () => {
-            const result = await ImagePicker.launchCameraAsync({
-              allowsEditing: true,
-              aspect: [4, 5],
-              quality: 0.4,
-            });
-            if (!result.canceled && result.assets?.[0]?.uri) {
-              setSelectedImages([...selectedImages, result.assets[0].uri]);
-            }
-          },
-        },
-        {
-          text: '🖼️ Gallery',
-          onPress: async () => {
-            const result = await ImagePicker.launchImageLibraryAsync({
-              allowsEditing: true,
-              aspect: [4, 5],
-              quality: 0.4,
-            });
-            if (!result.canceled && result.assets?.[0]?.uri) {
-              setSelectedImages([...selectedImages, result.assets[0].uri]);
-            }
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
   };
 
   const handleRemoveImage = (index: number) => {
@@ -583,10 +682,17 @@ export default function AddProductScreen() {
           {analyzingAi ? (
             <View style={styles.aiAnalyzingBox}>
               <ActivityIndicator size="small" color="#7C3AED" />
-              <View style={{ marginLeft: 10 }}>
+              <View style={{ marginLeft: 10, flex: 1 }}>
                 <Text style={styles.aiAnalyzingText}>Analyzing garment with AI...</Text>
                 <Text style={styles.aiAnalyzingSubtext}>Recognizing style, category & color specs</Text>
               </View>
+              <TouchableOpacity
+                style={styles.aiCancelBtn}
+                onPress={handleCancelAiAnalysis}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.aiCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <View style={{ marginTop: 12 }}>
@@ -1695,6 +1801,19 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#7C3AED',
     marginTop: 1,
+  },
+  aiCancelBtn: {
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  aiCancelBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#4B5563',
   },
   aiPrimaryBtn: {
     backgroundColor: '#7C3AED',

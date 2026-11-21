@@ -21,7 +21,7 @@ export default function PendingVerificationScreen() {
   const handleCheckStatus = async () => {
     setChecking(true);
     try {
-      const response = await api.get('merchant/getMerchant');
+      const response = await api.get('/merchant/getMerchant');
       const data = response.data?.merchant;
       if (data) {
         // Update local context
@@ -30,8 +30,17 @@ export default function PendingVerificationScreen() {
           isActive: !!data.isActive,
         });
 
-        // Trigger redirect based on updated status
-        router.replace('/');
+        if (data.isActive || data.status === 'active') {
+          Alert.alert('Approved!', 'Your account has been verified and activated.', [
+            { text: 'Enter Dashboard', onPress: () => router.replace('/(tabs)/orders') }
+          ]);
+        } else if (data.status === 'rejected') {
+          router.replace('/rejected');
+        } else if (data.status === 'pending_payment') {
+          router.replace('/payment');
+        } else {
+          Alert.alert('Status Info', 'Verification is still in progress. Our team will review your application soon.');
+        }
       } else {
         Alert.alert('Status Info', 'Verification is still in progress.');
       }

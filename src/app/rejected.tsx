@@ -20,7 +20,7 @@ export default function RejectedScreen() {
   const handleCheckStatus = async () => {
     setChecking(true);
     try {
-      const response = await api.get('merchant/getMerchant');
+      const response = await api.get('/merchant/getMerchant');
       const data = response.data?.merchant;
       if (data) {
         updateMerchantState({
